@@ -5,3 +5,13 @@
 	grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
 	gap: 0.75rem;
 }
+
+public-friends,
+friend-application {
+	display: block;
+}
+
+public-friends [hidden],
+friend-application [hidden] {
+	display: none !important;
+}

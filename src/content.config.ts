@@ -2,6 +2,8 @@ import { defineCollection } from "astro:content";
 import type { CollectionConfig } from "astro/content/config";
 import { glob } from "astro/loaders";
 import { type ZodType, z } from "astro/zod";
+import { slug as githubSlug } from "github-slugger";
+import publishedState from "./data/published-state.json";
 
 type PostData = {
 	title: string;
@@ -60,7 +62,19 @@ type ContentCollection<T> = CollectionConfig<
 >;
 
 const postsCollection: ContentCollection<PostData> = defineCollection({
-	loader: glob({ pattern: "**/*.{md,mdx}", base: "./src/content/posts" }),
+	loader: glob({
+		pattern: "**/*.{md,mdx}", base: "./src/content/posts",
+		generateId: ({ entry, data }) => {
+			const filePath = `src/content/posts/${entry.replaceAll("\\", "/")}`;
+			const published = publishedState.posts.find((post) => post.filePath === filePath);
+			if (published) {
+				if (typeof data.slug === "string" && data.slug !== published.slug) throw new Error(`固定网址与发布清单不一致: ${filePath}`);
+				return published.slug;
+			}
+			if (typeof data.slug === "string") return data.slug;
+			return entry.replace(/\.(md|mdx)$/i, "").split("/").map((part) => githubSlug(part)).join("/").replace(/\/index$/, "");
+		},
+	}),
 	schema: z.object({
 		title: z.string(),
 		published: z.date(),

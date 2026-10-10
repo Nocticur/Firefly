@@ -4,9 +4,11 @@ import { commentConfig } from "@/config/commentConfig";
 import Key from "@/i18n/i18nKey";
 import { i18n } from "@/i18n/translation";
 import { removeFileExtension } from "@/utils/url-utils";
+import { getStablePostId } from "@/utils/stable-post-id";
 import Artalk from "./Artalk.astro";
 import Disqus from "./Disqus.astro";
 import Giscus from "./Giscus.astro";
+import NocticurComments from "./NocticurComments.astro";
 import Twikoo from "./Twikoo.astro";
 import Waline from "./Waline.astro";
 
@@ -30,6 +32,7 @@ const path = customPath
 		: `/${slug}`;
 const url = `${Astro.site?.href}${path}`;
 const postTitle = post && "title" in post.data ? post.data.title : undefined;
+const articleId = post?.collection === "posts" ? getStablePostId(slug) : null;
 
 // 强制commentService类型为string，避免类型不兼容警告
 let commentService: string = commentConfig?.type || "none";
@@ -58,6 +61,7 @@ let commentService: string = commentConfig?.type || "none";
       </div>
       <!-- 评论内容区域 -->
       <div class="relative z-10 pl-2 pr-2">
+        {commentService === "nocticur" && <NocticurComments articleId={articleId} />}
         {commentService === "twikoo" && <Twikoo path={path} />}
         {commentService === "waline" && <Waline path={path} />}
         {commentService === "giscus" && <Giscus />}

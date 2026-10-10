@@ -83,3 +83,4 @@ export { sidebarLayoutConfig } from "./sidebarConfig"; // 侧边栏布局配置
 // 核心配置
 export { siteConfig } from "./siteConfig"; // 站点基础配置
 export { sponsorConfig } from "./sponsorConfig"; // 打赏配置
+export { getManagedIcons, MANAGED_SETTING_KEYS } from "../utils/managed-settings"; // 显式发布的后台字段适配

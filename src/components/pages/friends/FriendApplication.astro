@@ -1,0 +1,55 @@
+---
+import { Icon } from "astro-icon/components";
+
+const siteKey = (import.meta.env.PUBLIC_TURNSTILE_SITE_KEY || "").trim();
+const inputClass = "w-full px-3 py-2.5 rounded-xl border border-(--line-divider) bg-transparent text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:border-(--primary) focus:ring-1 focus:ring-(--primary) outline-none transition-all duration-200 text-sm";
+---
+
+<friend-application data-site-key={siteKey} class="mt-4 card-base z-10 px-9 py-6 relative w-full">
+  <div class="page-heading mb-4">
+    <div class="page-icon" aria-hidden="true"><Icon name="material-symbols:edit-note-rounded" /></div>
+    <div>
+      <h2>在线申请友链</h2>
+      <p>添加本站友链后填写申请，审核通过并正式上线后将发送邮件通知。</p>
+    </div>
+  </div>
+  <form data-friend-application>
+    <fieldset disabled={!siteKey} class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <label class="flex flex-col gap-2 text-sm">
+        <span>站点名称 <span aria-hidden="true">*</span></span>
+        <input name="name" required maxlength="120" autocomplete="organization" class={inputClass} />
+      </label>
+      <label class="flex flex-col gap-2 text-sm">
+        <span>站点链接 <span aria-hidden="true">*</span></span>
+        <input name="url" type="url" required maxlength="2000" placeholder="https://" autocomplete="url" class={inputClass} />
+      </label>
+      <label class="flex flex-col gap-2 text-sm md:col-span-2">
+        <span>站点描述 <span aria-hidden="true">*</span></span>
+        <textarea name="description" required maxlength="500" rows="3" class={inputClass} />
+      </label>
+      <label class="flex flex-col gap-2 text-sm">
+        <span>头像链接（选填）</span>
+        <input name="avatar" type="url" maxlength="2000" placeholder="https://" class={inputClass} />
+      </label>
+      <label class="flex flex-col gap-2 text-sm">
+        <span>联系邮箱 <span aria-hidden="true">*</span></span>
+        <input name="email" type="email" required maxlength="254" autocomplete="email" class={inputClass} />
+        <span class="text-xs text-neutral-500 dark:text-neutral-400">用于审核及上线通知，不会公开展示。</span>
+      </label>
+    </fieldset>
+    <div data-turnstile class="mt-4" />
+    <p data-verification-status role="status" aria-live="polite" class="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
+      {siteKey ? "正在加载人机验证…" : "人机验证暂未配置，在线申请无法提交。可通过上方联系方式申请友链。"}
+    </p>
+    <button type="button" data-verification-retry hidden class="mt-2 text-sm text-(--primary) hover:underline">重新加载人机验证</button>
+    <div class="mt-4 flex flex-wrap items-center gap-3">
+      <button type="submit" data-submit disabled class="btn-regular px-5 py-2.5 rounded-xl text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">提交申请</button>
+      <p data-submit-status role="status" aria-live="polite" class="text-sm text-neutral-500 dark:text-neutral-400" />
+    </div>
+  </form>
+  <noscript><p class="mt-3 text-sm text-neutral-500 dark:text-neutral-400">在线申请需要启用 JavaScript。可通过上方联系方式申请友链。</p></noscript>
+</friend-application>
+
+<script>
+  import "./friends";
+</script>

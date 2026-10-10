@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "Nocticur/blog",
+    "ref": "master",
+    "commit": "c075ac36c1313dc6ee47f7690c1a360aaa087da8",
+    "readOnly": true
+  },
+  "destination": {
+    "repository": "Nocticur/Firefly",
+    "ref": "master"
+  },
+  "logo": {
+    "sourcePath": "src/assets/images/logo-nocticur.png",
+    "destinationPath": "public/assets/images/logo-nocticur.png",
+    "sha256": "3a7ed7bac3634bb05876966b415600c9f3862be08e1df09b10142cb0c622b01f",
+    "copiedWithoutConversion": true
+  },
+  "articles": [
+    {
+      "slug": "cloudflare优选",
+      "path": "src/content/posts/cloudflare优选.md",
+      "originalSha256": "a5b228eb482c372709bcdbc6abd8dc649eac9c9ce2126d7b79fc9635a02eb532",
+      "sourceSha256": "52d4091db981716829e8926c7b3ec1fe19c359b6d46a3bf23b4ff64e77d685e0",
+      "bodySha256": "eade3aec9436841520b7ac9f996250495eafea2bd4a52db26a2ba55d6d449c27",
+      "onlyFrontmatterAddition": "Explicit fixed Chinese slug; all original fields and body bytes retained."
+    },
+    {
+      "slug": "软件分享",
+      "path": "src/content/posts/软件分享.md",
+      "originalSha256": "79d03cb69dd9ef603a1f14364144f23bbc5b369c44461fb3f12e70e2cddeb3fd",
+      "sourceSha256": "0c0121d1ee0ca0f60737386db147113ad724daf30d011498d0355c1f1a3197b1",
+      "bodySha256": "37d5a96cd9819c7949ad4d1a87e8e9378a719f02d4c4f2e6a15d59288de783e6",
+      "onlyFrontmatterAddition": "Explicit fixed Chinese slug; all original fields and body bytes retained."
+    }
+  ],
+  "expectedRecordCount": 16,
+  "expectedPublicCount": 15
+}

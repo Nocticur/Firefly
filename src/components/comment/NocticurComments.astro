@@ -1,0 +1,69 @@
+---
+interface Props {
+	articleId: string | null;
+}
+
+const { articleId } = Astro.props;
+const siteKey = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY ?? "";
+---
+
+<nocticur-comments data-article-id={articleId ?? ""} data-site-key={siteKey}>
+  <p data-comments-status role="status" aria-live="polite">
+    {articleId ? "正在加载评论…" : "此页面尚未关联已发布的文章，暂未开放评论。"}
+  </p>
+  <ol data-comments-list class="nocticur-comment-list"></ol>
+  <form data-comment-form class="nocticur-comment-form" hidden={!articleId}>
+    <div data-reply-panel class="nocticur-reply-panel" hidden>
+      <span data-reply-label></span>
+      <button type="button" data-cancel-reply>取消回复</button>
+    </div>
+    <div class="nocticur-comment-fields">
+      <label>
+        昵称
+        <input name="name" type="text" autocomplete="nickname" maxlength="120" required />
+      </label>
+      <label>
+        邮箱（选填，不公开）
+        <input name="email" type="email" autocomplete="email" maxlength="254" />
+      </label>
+    </div>
+    <label>
+      评论内容
+      <textarea name="body" rows="4" maxlength="5000" required placeholder="请以纯文本发表评论。"></textarea>
+    </label>
+    <div data-turnstile></div>
+    <p data-verification-status role="status" aria-live="polite">
+      {siteKey ? "正在加载人机验证…" : "本站未配置人机验证，暂时不能提交评论。"}
+    </p>
+    <button type="submit" disabled>提交评论</button>
+    <p data-submit-status role="status" aria-live="polite"></p>
+  </form>
+</nocticur-comments>
+
+<script>
+  import { registerNocticurComments } from "./nocticur-comments";
+
+  registerNocticurComments();
+</script>
+
+<style is:global>
+  nocticur-comments { display: block; color: var(--btn-content); }
+  .nocticur-comment-list { list-style: none; padding: 0; margin: 1rem 0 1.5rem; }
+  .nocticur-comment-item { padding: 1rem 0; border-bottom: 1px solid var(--line-color); }
+  .nocticur-comment-item[data-reply] { border-left: 2px solid var(--primary); padding-left: 1rem; }
+  .nocticur-comment-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; font-size: .875rem; }
+  .nocticur-comment-meta time, .nocticur-comment-parent, nocticur-comments [role="status"] { color: var(--content-meta); font-size: .875rem; }
+  .nocticur-comment-body { white-space: pre-wrap; overflow-wrap: anywhere; margin: .75rem 0; }
+  .nocticur-comment-parent { margin-top: .5rem; }
+  .nocticur-comment-form { display: grid; gap: .875rem; }
+  .nocticur-comment-form[hidden], .nocticur-reply-panel[hidden] { display: none; }
+  .nocticur-comment-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+  .nocticur-comment-form label { display: grid; gap: .4rem; font-size: .875rem; }
+  .nocticur-comment-form input, .nocticur-comment-form textarea { width: 100%; border: 1px solid var(--line-color); border-radius: .5rem; background: var(--btn-regular-bg); color: var(--btn-content); padding: .7rem; }
+  .nocticur-comment-form textarea { resize: vertical; }
+  nocticur-comments button { border-radius: .5rem; background: var(--btn-regular-bg); color: var(--primary); padding: .4rem .75rem; }
+  nocticur-comments button[type="submit"] { justify-self: start; padding: .6rem 1rem; }
+  nocticur-comments button:disabled { opacity: .5; cursor: not-allowed; }
+  .nocticur-reply-panel { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+  @media (max-width: 640px) { .nocticur-comment-fields { grid-template-columns: 1fr; } }
+</style>

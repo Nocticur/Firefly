@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "NITRO_PRESET=vercel pnpm build",
+  "crons": [{ "path": "/api/maintenance/cron", "schedule": "0 19 * * *" }],
+  "headers": [{ "source": "/api/:path*", "headers": [{ "key": "Cache-Control", "value": "no-store" }, { "key": "CDN-Cache-Control", "value": "no-store" }, { "key": "Vercel-CDN-Cache-Control", "value": "no-store" }] }]
+}

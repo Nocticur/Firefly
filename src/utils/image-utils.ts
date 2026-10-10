@@ -37,7 +37,7 @@ export function processCoverImageSync(
 	seed?: string,
 ): string {
 	if (!image || image === "") {
-		return "";
+		return coverImageConfig.defaultImage || "";
 	}
 
 	if (image !== "api") {

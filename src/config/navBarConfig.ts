@@ -4,6 +4,7 @@ import {
 	type NavBarSearchConfig,
 	NavBarSearchMethod,
 } from "../types/navBarConfig";
+import { applyManagedNavigation } from "../utils/managed-settings";
 
 // ============================================================================
 // 导航栏配置 - 根据顺序动态生成导航栏链接
@@ -243,4 +244,4 @@ export const LinkPresets: Record<string, NavBarLink> = {
 	},
 };
 
-export const navBarConfig: NavBarConfig = getDynamicNavBarConfig();
+export const navBarConfig: NavBarConfig = applyManagedNavigation(getDynamicNavBarConfig());

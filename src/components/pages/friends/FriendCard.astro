@@ -1,0 +1,57 @@
+---
+import { Icon } from "astro-icon/components";
+import type { FriendLink } from "@/types/friendsConfig";
+
+interface Props {
+	item: FriendLink;
+	publicTemplate?: boolean;
+}
+
+const { item, publicTemplate = false } = Astro.props;
+---
+
+<a
+  href={item.siteurl}
+  target="_blank"
+  rel="noopener noreferrer"
+  data-tags={item.tags?.join(",")}
+  data-friend-tags={JSON.stringify(item.tags || [])}
+  data-static-friend={!publicTemplate ? "" : undefined}
+  class="friend-card group flex items-center gap-3 p-2.5 rounded-xl border border-(--line-divider) hover:border-(--primary) hover:bg-(--card-bg) transition-all duration-300 hover:shadow-lg relative overflow-hidden"
+>
+  <div class="absolute inset-0 bg-(--primary) opacity-0 group-hover:opacity-5 transition-opacity duration-300 pointer-events-none" />
+  <Icon
+    name="material-symbols:arrow-outward-rounded"
+    class="absolute top-3 right-3 text-(--primary) text-lg opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300"
+  />
+  <div class="relative w-16 h-16 shrink-0 rounded-xl overflow-hidden bg-zinc-100 dark:bg-zinc-800 border border-black/5 dark:border-white/5 group-hover:scale-105 transition-transform duration-300">
+    <img
+      data-friend-avatar
+      src={item.imgurl || undefined}
+      alt={item.title}
+      loading="lazy"
+      referrerpolicy="no-referrer"
+      class="w-full h-full object-cover"
+    />
+    <span data-avatar-fallback hidden class="w-full h-full items-center justify-center text-(--primary) font-bold text-xl" aria-hidden="true" />
+  </div>
+  <div class="grow min-w-0 flex flex-col justify-center gap-0.5">
+    <div data-friend-name class="font-bold text-base text-neutral-900 dark:text-neutral-100 group-hover:text-(--primary) transition-colors truncate pr-4">
+      {item.title}
+    </div>
+    <div
+      data-friend-description
+      class="text-sm text-neutral-500 dark:text-neutral-400 line-clamp-1"
+      title={item.desc}
+    >
+      {item.desc}
+    </div>
+    <div data-friend-tag-list class="flex flex-wrap gap-1 mt-1">
+      {item.tags?.slice(0, 3).map((tag) => (
+        <span class="text-[0.65rem] px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400 transition-colors duration-300">
+          {tag}
+        </span>
+      ))}
+    </div>
+  </div>
+</a>

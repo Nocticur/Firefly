@@ -1,0 +1,88 @@
+---
+import { Icon } from "astro-icon/components";
+import I18nKey from "@/i18n/i18nKey";
+import { i18n } from "@/i18n/translation";
+import type { FriendLink } from "@/types/friendsConfig";
+import FriendCard from "./FriendCard.astro";
+
+interface Props {
+	items: FriendLink[];
+}
+
+const { items } = Astro.props;
+const allTags = [...new Set(items.flatMap((item) => item.tags || []))].sort();
+const templateItem: FriendLink = {
+	title: "",
+	imgurl: "",
+	desc: "",
+	siteurl: "#",
+	tags: [],
+	weight: 0,
+	enabled: true,
+};
+---
+
+<public-friends>
+  <div class="mb-6">
+    <div class="relative mb-3">
+      <Icon
+        name="material-symbols:search"
+        class="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400 dark:text-neutral-500 text-lg pointer-events-none"
+      />
+      <input
+        type="search"
+        data-search
+        aria-label={i18n(I18nKey.searchFriends) || "搜索友链"}
+        placeholder={i18n(I18nKey.searchFriends) || "搜索友链..."}
+        class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-(--line-divider) bg-transparent text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:border-(--primary) focus:ring-1 focus:ring-(--primary) outline-none transition-all duration-200 text-sm"
+      />
+    </div>
+    <div data-tag-filters class="flex flex-wrap gap-2">
+      <button
+        type="button"
+        data-tag="all"
+        class="category-pill px-3 py-1.5 rounded-full text-sm font-medium transition-colors duration-200"
+        data-active
+        aria-pressed="true"
+      >
+        {i18n(I18nKey.all)}
+      </button>
+      {allTags.map((tag) => (
+        <button
+          type="button"
+          data-tag={tag}
+          class="category-pill px-3 py-1.5 rounded-full text-sm font-medium transition-colors duration-200"
+          aria-pressed="false"
+        >
+          {tag}
+        </button>
+      ))}
+    </div>
+  </div>
+
+  <div class="flex items-center flex-wrap gap-3 text-sm text-neutral-500 dark:text-neutral-400">
+    <p data-friends-status role="status" aria-live="polite">正在加载已上线友链…</p>
+    <button type="button" data-friends-retry hidden class="text-(--primary) hover:underline">重试</button>
+  </div>
+  <noscript><p class="text-sm text-neutral-500 dark:text-neutral-400">启用 JavaScript 后可加载新增友链并使用搜索筛选。</p></noscript>
+
+  <div class="friends-grid my-4" data-friends-grid>
+    {items.length === 0 && (
+      <div data-static-empty class="col-span-full flex flex-col items-center justify-center py-12 text-neutral-400 dark:text-neutral-500">
+        <Icon name="material-symbols:group-off-outline" class="text-4xl mb-3" />
+        <div class="text-sm">{i18n(I18nKey.friendsEmpty)}</div>
+      </div>
+    )}
+    {items.map((item) => <FriendCard item={item} />)}
+  </div>
+
+  <div data-search-empty hidden class="friends-empty flex-col items-center justify-center py-12 text-neutral-400 dark:text-neutral-500">
+    <Icon name="material-symbols:search-off-rounded" class="text-4xl mb-3" />
+    <div class="text-sm">{i18n(I18nKey.searchNoResults)}</div>
+  </div>
+  <template data-friend-template><FriendCard item={templateItem} publicTemplate /></template>
+</public-friends>
+
+<script>
+  import "./friends";
+</script>

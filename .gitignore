@@ -47,3 +47,11 @@ package/
 .codex*
 .claude
 .mimocode
+
+# Separate Vercel management project outputs and local configuration
+apps/admin/public/
+apps/admin/.nitro/
+apps/admin/.output/
+apps/admin/.vercel/
+apps/admin/.env*
+!apps/admin/.env.example

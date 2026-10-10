@@ -1,4 +1,5 @@
 import type { CoverImageConfig } from "../types/coverImageConfig";
+import { applyManagedCoverSettings } from "../utils/managed-settings";
 
 /**
  * 文章封面图配置
@@ -17,7 +18,7 @@ import type { CoverImageConfig } from "../types/coverImageConfig";
  * image: "api"
  * ---
  */
-export const coverImageConfig: CoverImageConfig = {
+export const coverImageConfig: CoverImageConfig = applyManagedCoverSettings({
 	// 是否在文章详情页显示封面图
 	enableInPost: true,
 
@@ -37,4 +38,4 @@ export const coverImageConfig: CoverImageConfig = {
 			"https://uapis.cn/api/v1/random/image?category=acg&type=pc",
 		],
 	},
-};
+});

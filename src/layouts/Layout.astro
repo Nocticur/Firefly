@@ -31,6 +31,7 @@ import {
 	PAGE_WIDTH,
 } from "@/constants/constants";
 import { defaultFavicons } from "@/constants/icon";
+import { getManagedIcons } from "@/utils/managed-settings";
 import type { Favicon } from "@/types/config";
 import { isHomePage } from "@/utils/layout-utils";
 import { getAuthorAvatarUrl, getSiteLogo } from "@/utils/schema-image";
@@ -110,9 +111,18 @@ if (title) {
 
 const favicons: Favicon[] =
 	siteConfig.favicon.length > 0 ? siteConfig.favicon : defaultFavicons;
+const managedIcons = getManagedIcons();
+const managedFavicons = [
+	{ src: managedIcons["favicon.svg"], sizes: "any", type: "image/svg+xml" },
+	{ src: managedIcons["favicon.ico"], sizes: "any", type: "image/x-icon" },
+	{ src: managedIcons["favicon-96x96.png"], sizes: "96x96", type: "image/png" },
+].filter((icon) => icon.src);
+const hasManagedManifest = Boolean(managedIcons["web-app-manifest-192x192.png"] || managedIcons["web-app-manifest-512x512.png"]);
 // apple-touch-icon：优先取 favicon 中的 png，否则取第一个
 const appleTouchIcon =
-	favicons.find((f) => f.src.toLowerCase().endsWith(".png")) ?? favicons[0];
+	managedIcons["apple-touch-icon.png"]
+		? { src: managedIcons["apple-touch-icon.png"], sizes: "180x180" }
+		: favicons.find((f) => f.src.toLowerCase().endsWith(".png")) ?? favicons[0];
 
 // const siteLang = siteConfig.lang.replace('_', '-')
 if (!lang) {
@@ -255,7 +265,9 @@ const ogImageAlt = propsOgImageAlt ?? pageTitle;
     <meta name="generator" content={Astro.generator} />
     <meta name="theme-color" content={`hsl(${siteConfig.themeColor.hue} 90% 60%)`} />
     {
-      favicons.map((favicon) => (
+      managedFavicons.length > 0 ? managedFavicons.map((favicon) => (
+        <link rel="icon" href={favicon.src} sizes={favicon.sizes} type={favicon.type} />
+      )) : favicons.map((favicon) => (
         <link
           rel="icon"
           href={favicon.src.startsWith("/") ? url(favicon.src) : favicon.src}
@@ -272,6 +284,7 @@ const ogImageAlt = propsOgImageAlt ?? pageTitle;
         sizes={appleTouchIcon.sizes}
       />
     )}
+    {hasManagedManifest && <link rel="manifest" href={url("site.webmanifest")} />}
 
     <!-- 为特定域名的图片添加 referrerpolicy 以解决 403 问题 -->
     <!-- 注：静态图片（ImageWrapper 组件、Markdown 正文图）已在构建期加好 referrerpolicy；

@@ -340,6 +340,7 @@ html.is-page-transitioning .banner-home-text-overlay {
 
 .banner-subtitle {
     text-shadow: 0 2px 16px rgba(0, 0, 0, 0.6);
+    white-space: pre-wrap;
     /* 独立字体设置，通过 fontConfig.bannerSubtitleFont 配置 */
     font-family: var(--font-banner-subtitle, inherit);
 }

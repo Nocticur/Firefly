@@ -1,0 +1,30 @@
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { BookOpen, LayoutDashboard, Settings2, ListTree, Image, MessageSquare, Link2, Rocket, ShieldCheck, LogOut, Menu, Moon, Wrench } from "lucide-react";
+import type { AdminSession } from "../shared/contracts";
+import { configureSession, RequestError, request, write, message } from "./lib/api";
+import { Loading, Notice } from "./components/Common";
+import { Dashboard } from "./pages/Dashboard";
+const Posts = lazy(() => import("./pages/Posts").then(module => ({ default: module.Posts })));
+const Settings = lazy(() => import("./pages/Settings").then(module => ({ default: module.Settings })));
+const Navigation = lazy(() => import("./pages/Navigation").then(module => ({ default: module.Navigation })));
+const Media = lazy(() => import("./pages/Media").then(module => ({ default: module.Media })));
+const Moderation = lazy(() => import("./pages/Moderation").then(module => ({ default: module.Moderation })));
+const Releases = lazy(() => import("./pages/Operations").then(module => ({ default: module.Releases })));
+const Maintenance = lazy(() => import("./pages/Operations").then(module => ({ default: module.Maintenance })));
+const items = [
+	{ id: "dashboard", label: "仪表盘", icon: LayoutDashboard }, { id: "posts", label: "文章与历史", icon: BookOpen },
+	{ id: "settings", label: "站点设置", icon: Settings2 }, { id: "navigation", label: "导航与图标", icon: ListTree },
+	{ id: "media", label: "媒体库", icon: Image }, { id: "comments", label: "评论管理", icon: MessageSquare },
+	{ id: "friends", label: "友链审核", icon: Link2 }, { id: "releases", label: "发布任务", icon: Rocket }, { id: "maintenance", label: "维护与备份", icon: Wrench },
+];
+function readPage() { return location.hash.slice(1).split("?")[0] || "dashboard"; }
+export function App() {
+	const [session, setSession] = useState<AdminSession | null>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(""); const [login, setLogin] = useState(false);
+	const [page, setPage] = useState(readPage); const [open, setOpen] = useState(false);
+	const lastHash = useRef(location.hash);
+	async function loadSession() { setLoading(true); setError(""); try { const result = await request<AdminSession>("/auth/session"); configureSession(result.data.csrfToken); setSession(result.data); setLogin(false); } catch (error) { if (error instanceof RequestError && error.status === 401) setLogin(true); else setError(message(error)); } finally { setLoading(false); } }
+	useEffect(() => { void loadSession(); const onHash = () => { const permission = new Event("admin:before-navigate", { cancelable: true }); if (!window.dispatchEvent(permission)) { history.replaceState(null, "", lastHash.current || "#dashboard"); return; } lastHash.current = location.hash; setPage(readPage()); setOpen(false); window.dispatchEvent(new Event("admin:navigated")); }; window.addEventListener("hashchange", onHash); return () => window.removeEventListener("hashchange", onHash); }, []);
+	async function logout() { if (!window.dispatchEvent(new Event("admin:before-navigate", { cancelable: true }))) return; try { await write("/auth/logout"); configureSession(""); setSession(null); setLogin(true); } catch (error) { setError(message(error)); } }
+	if (!session) return <main className="login-screen"><section className="login-card"><div className="brand-icon"><Moon size={26}/></div><p className="eyebrow">NOCTICUR / FIREFLY</p><h1>管理你的夜幕</h1><p>文章、媒体与每一次发布，都在这里。</p>{loading ? <Loading/> : error ? <><Notice>{error}</Notice><button className="button secondary" onClick={() => void loadSession()}>重新检查服务</button></> : login ? <><a className="button" href="/api/auth/github"><ShieldCheck size={18}/>使用 GitHub 登录</a><small>仅允许配置的 GitHub 数字用户 ID 登录。</small></> : null}<a className="quiet-link" href="https://blog.mourn.top/">访问博客 ↗</a></section></main>;
+	return <div className="shell"><aside className={`sidebar ${open ? "open" : ""}`}><a className="brand" href="#dashboard"><div className="brand-icon"><Moon size={22}/></div><span>Nocticur<small>FIREFLY · 管理后台</small></span></a><div className="sidebar-label">工作空间</div><nav aria-label="后台导航">{items.map(item => <a key={item.id} href={`#${item.id}`} aria-current={page === item.id ? "page" : undefined} className={page === item.id ? "active" : ""}><item.icon size={18}/>{item.label}</a>)}</nav><div className="sidebar-bottom"><a href="https://blog.mourn.top/" target="_blank" rel="noreferrer">访问博客 ↗</a><div className="environment"><span className="status-dot"/>{session.environment === "production" ? "生产环境" : session.environment === "preview" ? "预览环境" : "开发环境"}</div><small>Asia / Shanghai</small></div></aside>{open && <button className="sidebar-overlay" aria-label="关闭导航" onClick={() => setOpen(false)}/>}<div className="workspace"><header className="topbar"><button className="icon-button menu-button" aria-label="打开导航" onClick={() => setOpen(!open)}><Menu size={22}/></button><span className="breadcrumb">工作空间 <span>/</span> {items.find(item => item.id === page)?.label ?? "仪表盘"}</span><div className="account">{session.user.avatarUrl && <img src={session.user.avatarUrl} alt=""/>}<span>{session.user.name || session.user.login}</span><button className="icon-button" onClick={() => void logout()} aria-label="退出登录"><LogOut size={18}/></button></div></header><main className="main">{error && <Notice>{error}</Notice>}{!session.productionPublish && <div className="environment-notice">当前环境没有生产发布权限；草稿与媒体使用隔离存储。</div>}<Suspense fallback={<Loading/>}>{page === "dashboard" ? <Dashboard/> : page === "posts" ? <Posts/> : page === "settings" ? <Settings/> : page === "navigation" ? <Navigation/> : page === "media" ? <Media/> : page === "comments" || page === "friends" ? <Moderation kind={page}/> : page === "releases" ? <Releases canPublish={session.productionPublish}/> : page === "maintenance" ? <Maintenance/> : <Dashboard/>}</Suspense></main><footer className="workspace-footer">Nocticur · 向 夜 驰 行 ， 不 问 喧 嚣<span>设置与内容保存后，需显式发布才能上线。</span></footer></div></div>;
+}
