@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, Eye, EyeOff, KeyRound, LockKeyhole, Moon, Shield
 import avatar from "../assets/nocticur-avatar.webp";
 import { message, request, write } from "../lib/api";
 import { Loading } from "./Common";
+import { isAdminPassword, MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH } from "../../shared/password-policy";
 import "./entry.css";
 
 type Props = { loading: boolean; serviceError: string; onRetry: () => Promise<void>; onUnlocked: () => Promise<void> };
@@ -17,6 +18,7 @@ export function EntryPage({ loading, serviceError, onRetry, onUnlocked }: Props)
 	const [capsLock, setCapsLock] = useState(false);
 	const [dark, setDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
 	const input = useRef<HTMLInputElement>(null);
+	const validPassword = isAdminPassword(password);
 
 	async function checkEntry() {
 		setChecking(true); setError("");
@@ -29,7 +31,7 @@ export function EntryPage({ loading, serviceError, onRetry, onUnlocked }: Props)
 	useEffect(() => { void checkEntry(); }, []);
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (busy || !password) return;
+		if (busy || !validPassword) return;
 		setBusy(true); setError(""); setCapsLock(false);
 		const submitted = password;
 		setPassword(""); setVisible(false);
@@ -67,9 +69,9 @@ export function EntryPage({ loading, serviceError, onRetry, onUnlocked }: Props)
 						{displayedError && <div className="entry-error" role="alert" id="entry-error">{displayedError}</div>}
 						{available && <form onSubmit={(event) => void submit(event)}>
 							<label className="entry-label" htmlFor="entry-password">管理密码</label>
-							<div className="entry-password-field"><KeyRound size={18} aria-hidden="true" /><input ref={input} id="entry-password" name="password" type={visible ? "text" : "password"} value={password} onChange={(event) => { setPassword(event.target.value); if (error) setError(""); }} onKeyUp={(event) => setCapsLock(event.getModifierState("CapsLock"))} onBlur={() => setCapsLock(false)} placeholder="请输入管理密码" autoComplete="current-password" autoCapitalize="none" spellCheck={false} required maxLength={256} disabled={busy} aria-invalid={Boolean(error)} aria-describedby={error ? "entry-error" : "entry-password-help"} /><button type="button" className="entry-reveal" onClick={() => setVisible(!visible)} aria-label={visible ? "隐藏密码" : "显示密码"} aria-pressed={visible} disabled={busy}>{visible ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
-							<p className="entry-password-help" id="entry-password-help">{capsLock ? "大写锁定已开启" : "验证通过后直接进入后台。"}</p>
-							<button className="entry-primary" type="submit" disabled={busy || !password}>{busy ? "正在登录…" : "进入后台"}<ArrowRight size={18} /></button>
+							<div className="entry-password-field"><KeyRound size={18} aria-hidden="true" /><input ref={input} id="entry-password" name="password" type={visible ? "text" : "password"} value={password} onChange={(event) => { setPassword(event.target.value); if (error) setError(""); }} onKeyUp={(event) => setCapsLock(event.getModifierState("CapsLock"))} onBlur={() => setCapsLock(false)} placeholder="请输入管理密码" autoComplete="current-password" autoCapitalize="none" spellCheck={false} required minLength={MIN_PASSWORD_LENGTH} maxLength={MAX_PASSWORD_LENGTH * 2} disabled={busy} aria-invalid={Boolean(error) || Boolean(password && !validPassword)} aria-describedby={error ? "entry-error" : "entry-password-help"} /><button type="button" className="entry-reveal" onClick={() => setVisible(!visible)} aria-label={visible ? "隐藏密码" : "显示密码"} aria-pressed={visible} disabled={busy}>{visible ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
+							<p className="entry-password-help" id="entry-password-help">{capsLock ? "大写锁定已开启" : "密码为 3～10 个字符，验证通过后直接进入后台。"}</p>
+							<button className="entry-primary" type="submit" disabled={busy || !validPassword}>{busy ? "正在登录…" : "进入后台"}<ArrowRight size={18} /></button>
 						</form>}
 						{(!available || serviceError) && <button className="entry-retry" type="button" onClick={() => void retry()}>重新检查服务</button>}
 					</>}

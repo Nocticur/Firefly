@@ -5,19 +5,24 @@ import { getDatabase, getSiteId } from "./db.js";
 import { consumeLoginAllowance } from "./login-rate.js";
 import { ApiFailure, constantTimeEqual, managementOrigin, readJson } from "./security.js";
 import { issueSession, SESSION_COOKIE, SESSION_SECONDS } from "./session.js";
+import { isAdminPassword } from "../shared/password-policy.js";
+import { createPasswordHash, PASSWORD_SCRYPT_OPTIONS, verifyPassword } from "./password.js";
 
 export const ENTRY_COOKIE = "__Host-admin-entry";
 export const ENTRY_SECONDS = 12 * 60 * 60;
 const cookieOptions = { path: "/", secure: true, httpOnly: true, sameSite: "Lax" as const };
-let cached: { password: string; scope: string; key: Buffer } | undefined;
+const cachePepper = randomBytes(32);
+let cached: { fingerprint: string; scope: string; key: Buffer; passwordHash: string } | undefined;
 
 function configuration() {
 	const password = process.env.ADMIN_ENTRY_PASSWORD;
-	if (!password || Array.from(password).length < 12 || Buffer.byteLength(password, "utf8") > 256 || !password.trim()) throw new ApiFailure(503, "ENTRY_CONFIGURATION_REQUIRED", "后台入口暂未启用，请联系站点管理员");
+	if (!isAdminPassword(password)) throw new ApiFailure(503, "ENTRY_CONFIGURATION_REQUIRED", "后台入口暂未启用，请联系站点管理员");
 	const scope = `firefly-admin-entry:v1:${getSiteId()}:${managementOrigin()}`;
-	if (!cached || cached.password !== password || cached.scope !== scope) {
+	const fingerprint = createHmac("sha256", cachePepper).update(`${scope}\0${password}`).digest("hex");
+	if (!cached || cached.fingerprint !== fingerprint || cached.scope !== scope) {
 		// A slow KDF also protects the signing key against offline guessing of a captured Cookie.
-		cached = { password, scope, key: scryptSync(password, scope, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }) };
+		// Keep only derived values in the cache; a random verifier salt must not change the cross-instance Cookie key.
+		cached = { fingerprint, scope, key: scryptSync(password, scope, 32, PASSWORD_SCRYPT_OPTIONS), passwordHash: createPasswordHash(password) };
 	}
 	return cached;
 }
@@ -58,9 +63,9 @@ export function registerEntryRoutes(app: AdminApp) {
 		const config = configuration();
 		if (context.req.header("Origin") !== managementOrigin() || context.req.header("Sec-Fetch-Site") === "cross-site") throw new ApiFailure(403, "ENTRY_ORIGIN_REJECTED", "请从管理页面提交密码");
 		const body = await readJson(context.req.raw, 1024);
-		if (typeof body.password !== "string" || !body.password || Buffer.byteLength(body.password, "utf8") > 256) throw new ApiFailure(400, "ENTRY_PASSWORD_INVALID", "请输入有效的管理密码");
+		if (!isAdminPassword(body.password)) throw new ApiFailure(400, "ENTRY_PASSWORD_INVALID", "密码须为 3～10 个字符");
 		await consumeLoginAllowance(getDatabase(), getSiteId(), context.req.raw, config.key.toString("hex"), "entry");
-		if (!constantTimeEqual(body.password, config.password)) {
+		if (!await verifyPassword(body.password, config.passwordHash)) {
 			throw new ApiFailure(401, "ENTRY_PASSWORD_INCORRECT", "密码不正确，请重新输入");
 		}
 		const entryToken = issueEntryToken();

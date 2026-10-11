@@ -13,7 +13,7 @@ import { PASSWORD_ADMIN_ID } from "../server/session.js";
 
 const databaseUrl = process.env.ADMIN_TEST_DATABASE_URL;
 const origin = "http://localhost:3000";
-const password = "synthetic-database-entry-password";
+const password = "DbTest_42";
 function responseCookie(response: Response, name: string): string {
 	const cookie = response.headers.getSetCookie().find((value) => value.startsWith(`${name}=`));
 	assert.ok(cookie, `Expected ${name} Cookie`);
@@ -44,9 +44,11 @@ test("password alone creates a durable administrator session with CSRF, expiry a
 	try {
 		for (const name of ["001-core.sql", "003-interactions.sql"]) await db.query(await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
 		await t.test("entry status fails closed until configured, without exposing secrets", async () => {
-			delete process.env.ADMIN_ENTRY_PASSWORD;
-			assert.equal((await app.request(`${origin}/api/auth/entry`)).status, 503);
-			assert.equal((await post(password)).status, 503);
+			for (const value of [undefined, "", "ab", "x".repeat(11), " ".repeat(3)]) {
+				if (value === undefined) delete process.env.ADMIN_ENTRY_PASSWORD; else process.env.ADMIN_ENTRY_PASSWORD = value;
+				assert.equal((await app.request(`${origin}/api/auth/entry`)).status, 503);
+				assert.equal((await post(password)).status, 503);
+			}
 			process.env.ADMIN_ENTRY_PASSWORD = password;
 			const status = await app.request(`${origin}/api/auth/entry`);
 			assert.deepEqual(await status.json(), { data: { verified: false } });
@@ -56,13 +58,33 @@ test("password alone creates a durable administrator session with CSRF, expiry a
 			assert.equal((await post(password, "192.0.2.1", { Origin: "https://evil.example" })).status, 403);
 			assert.equal((await post(password, "192.0.2.1", { Origin: "" })).status, 403);
 			assert.equal((await post(password, "192.0.2.1", { "Sec-Fetch-Site": "cross-site" })).status, 403);
-			for (const value of [null, 1, [], {}, "", "界".repeat(86)]) assert.equal((await post(value)).status, 400);
+			for (const value of [null, 1, [], {}, "", "ab", "x".repeat(11), "界".repeat(11), "\ud800ab", " ".repeat(3)]) assert.equal((await post(value)).status, 400);
 			assert.equal((await post("x".repeat(2000))).status, 413);
 			assert.equal((await post(password, "192.0.2.1", { "Content-Type": "text/plain" })).status, 415);
 			assert.equal((await db.query("SELECT subject FROM interaction_rate_limits WHERE site_id=$1 AND subject LIKE 'entry:%'", [site])).length, 0);
 		});
+		await t.test("real 3- and 10-character passwords including Unicode create sessions and rotation invalidates prior proof", async () => {
+			let previousCookie = "";
+			try {
+				for (const [index, value] of ["a1!", "testOnly42", "暮夜途", "🚀".repeat(10)].entries()) {
+					process.env.ADMIN_ENTRY_PASSWORD = value;
+					if (previousCookie) assert.equal((await app.request(`${origin}/api/auth/session`, { headers: { Cookie: previousCookie } })).status, 401);
+					const response = await post(value, `192.0.2.${60 + index}`);
+					assert.equal(response.status, 200); assert.deepEqual(await response.json(), { data: { verified: true } });
+					const both = `${responseCookie(response, ENTRY_COOKIE)}; ${responseCookie(response, "__Host-admin-session")}`;
+					const current = await app.request(`${origin}/api/auth/session`, { headers: { Cookie: both } });
+					assert.equal(current.status, 200);
+					const session = (await current.json()).data;
+					assert.equal(session.user.id, PASSWORD_ADMIN_ID);
+					previousCookie = both;
+				}
+			} finally {
+				process.env.ADMIN_ENTRY_PASSWORD = password;
+				await db.query("DELETE FROM sessions WHERE site_id=$1", [site]);
+			}
+		});
 		await t.test("wrong passwords do not issue an entry or administrator session", async () => {
-			const response = await post("a-guess-that-is-wrong");
+			const response = await post("wrongGuess");
 			assert.equal(response.status, 401);
 			assert.equal((await response.json()).error.code, "ENTRY_PASSWORD_INCORRECT");
 			assert.equal(response.headers.getSetCookie().some((cookie) => cookie.startsWith(`${ENTRY_COOKIE}=v1.`)), false);
@@ -137,7 +159,7 @@ test("password alone creates a durable administrator session with CSRF, expiry a
 			assert.equal((await app.request(`${origin}/api/auth/session`, { headers: { Cookie: both } })).status, 401);
 		});
 		await t.test("concurrent password attempts share a persistent five-per-IP quota", async () => {
-			const responses = await Promise.all(Array.from({ length: 8 }, () => post("wrong-guess", "192.0.2.22")));
+			const responses = await Promise.all(Array.from({ length: 8 }, () => post("badGuess9", "192.0.2.22")));
 			assert.equal(responses.filter((response) => response.status === 401).length, 5);
 			assert.equal(responses.filter((response) => response.status === 429).length, 3);
 			assert.equal((await post(password, "192.0.2.22")).status, 429);

@@ -2,9 +2,9 @@
 
 选择 `Nocticur/Firefly`、发布分支 `master`；时间口径为 `Asia/Shanghai`。此表分别记录本地执行结果、测试替身覆盖及真实平台未执行项，不能将本地测试通过视为已上线。
 
-2026-10-11 安全复审后的最终回归已完成，以下数字对应更新后的源码和锁文件。修复及剩余边界见 [security-review.md](./security-review.md)；变量的来源见 [environment-variables.md](./environment-variables.md)。
+2026-10-11 安全复审后的最终回归已完成，以下数字对应更新后的源码和锁文件。最新凭据、权限、进程及数据访问结果见 [最终安全检查](./final-security-review.md)，早期修复及其边界见 [security-review.md](./security-review.md)；变量的来源见 [environment-variables.md](./environment-variables.md)。
 
-同日按用户要求完成密码直接登录与免费部署说明后再次回归，后台测试增加至 180 项；进入页、截图与安全边界见 [admin-entry-review.md](./admin-entry-review.md)。原安全复审压缩包仍保存此前快照，新增入口以 Git 交付为准。
+同日按用户要求完成密码直接登录与免费部署说明后再次回归，后台测试增加至 231 项，并完成 3～10 字符自动哈希与整体安全检查；进入页、截图与安全边界见 [admin-entry-review.md](./admin-entry-review.md)。原安全复审压缩包仍保存此前快照，新增入口以 Git 交付为准。
 
 ## 当前执行结果
 
@@ -13,9 +13,10 @@
 | 前置代码备份 | 已执行 | `/workspace/backups/firefly-before-nocticur/` 的 Git bundle 与 tracked tar，已完成校验；原 HEAD 为 `6d82554bfe1cb3d4b43adb0969dad1d43ac6dee3` |
 | 只读来源与原图 | 已执行 | 来源提交 `c075ac36c1313dc6ee47f7690c1a360aaa087da8`；原图 SHA256 为 `3a7ed7bac3634bb05876966b415600c9f3862be08e1df09b10142cb0c622b01f`，见迁移 provenance |
 | 内容迁移与基线 | 已执行 | 基线与 provenance 保存原 14 条、迁入两篇及正文哈希；本地管理导入 16 条、公开映射 15 篇，原草稿继续私有 |
-| `pnpm check` | 已执行，通过 | [blog-check-final.log](/workspace/.firefly-environment/blog-check-final.log)：272 文件，0 errors、0 warnings、0 hints |
-| 后台完整测试 | 已执行，通过 | [admin-tests-final.log](/workspace/.firefly-environment/admin-tests-final.log)：180 通过、0 失败、0 跳过；使用隔离真实 PostgreSQL，GitHub / Vercel / Blob / Resend / Turnstile 为受控替身 |
+| `pnpm check` | 已执行，通过 | [blog-check-final.log](/workspace/.firefly-environment/blog-check-final.log)：273 文件，0 errors、0 warnings、0 hints |
+| 后台完整测试 | 已执行，通过 | [admin-tests-final.log](/workspace/.firefly-environment/admin-tests-final.log)：231 通过、0 失败、0 跳过；使用隔离真实 PostgreSQL，GitHub / Vercel / Blob / Resend / Turnstile 为受控替身 |
 | 发布清单测试 | 已执行，通过 | [manifest-tests-final.log](/workspace/.firefly-environment/manifest-tests-final.log)：13 通过、0 失败、0 跳过；验证文章映射、草稿隔离、内容摘要、实际构建产物和永久重定向 |
+| 文章加密与浏览器权限 | 已执行，通过 | [article-crypto-tests-final.log](/workspace/.firefly-environment/article-crypto-tests-final.log)：3 项通过；[browser-final-security.json](/workspace/.firefly-environment/browser-final-security.json)：4 项通过；随机盐/IV、错误密码和篡改拒绝、旧密码缓存只删除、输入清空、刷新重输、敏感设备权限未调用及第三方无凭据头 |
 | 根与后台最终类型检查 | 已执行，通过 | [blog-typecheck-final.log](/workspace/.firefly-environment/blog-typecheck-final.log) 与 [admin-typecheck-final.log](/workspace/.firefly-environment/admin-typecheck-final.log)：根 `pnpm type-check` 与后台 `type-check` 均成功 |
 | 完整博客 `pnpm build` | 已执行，通过 | [blog-build-final.log](/workspace/.firefly-environment/blog-build-final.log)：42 个生成路由、15 篇公开文章、33 个 Pagefind 文件；保留资源后处理、字体处理及最终清单 |
 | Nitro Vercel 构建 | 已执行，通过 | [admin-build-final.log](/workspace/.firefly-environment/admin-build-final.log)：`NITRO_PRESET=vercel pnpm --filter @nocticur/admin build` 成功；生成 Node 函数及 20 steps / 3 workflows，包含 Workflow 入口 |
@@ -25,8 +26,10 @@
 | 订阅与搜索 | 已执行，通过 | [smoke-migration.log](/workspace/.firefly-environment/smoke-migration.log)：生产预览 12 项通过，无页面运行错误；RSS / Atom 各 15 项，Pagefind 实际搜索与搜索输入可用，目录、OG 图与重复文章请求正常 |
 | 迁移字节复核 | 已执行，通过 | [migration-integrity-audit.json](/workspace/.firefly-environment/migration-integrity-audit.json)：原 14 条文件哈希完整一致；两篇仅增加 slug；头像与四条模板动态保持原字节 |
 | 安全浏览器验证 | 已执行，通过 | [browser-security-review.json](/workspace/.firefly-environment/browser-security-review.json)：6 项通过，覆盖模板署名、旧收款入口、基线核对、待审核头像零跟踪请求、评论默认关闭与匿名基线读取拒绝 |
-| 后台密码入口 | 已执行，通过 | [browser-entry.json](/workspace/.firefly-environment/browser-entry.json)：10 项浏览器检查通过；真实密码直接登录、刷新保留、Cookie/CSRF/注销、旧 OAuth 路由拒绝、深浅主题、320/390 px 布局及博客按钮；新增服务端单元与数据库测试计入 180 项 |
-| npm 依赖漏洞审计 | 已执行，通过 | [dependency-audit.json](/workspace/.firefly-environment/dependency-audit.json)：1829 依赖，0 critical/high/moderate/low/info；修复前 59 项记录保存在 `dependency-audit-before.json`；没有忽略公告 |
+| 后台密码入口 | 已执行，通过 | [browser-entry.json](/workspace/.firefly-environment/browser-entry.json)：11 项浏览器检查通过；真实密码直接登录、刷新保留、Cookie/CSRF/注销、旧 OAuth 路由拒绝、深浅主题、320/390 px 布局及博客按钮；新增服务端单元与数据库测试计入 231 项 |
+| 凭据、授权与进程审查 | 已执行，范围见报告 | [final-security-review.md](./final-security-review.md)：公开产物无凭据命中，历史候选均为官方示例/假令牌；41 个管理操作拒绝匿名/伪造请求；CI 最小权限、遥测关闭、开发进程清理；未核验生产账户权限与日志 |
+| Biome CI | 本次加密代码/脚本通过；整仓未通过 | [biome-baseline-comparison.json](/workspace/.firefly-environment/biome-baseline-comparison.json)：整仓 21 项格式/导入/正则 lint 诊断与修改前 `2f6e967` 完全一致；未将这项存量失败记为通过 |
+| npm 依赖漏洞审计 | 已执行，通过 | [dependency-audit-current.json](/workspace/.firefly-environment/dependency-audit-current.json)：1829 依赖，0 critical/high/moderate/low/info；修复前 59 项记录保存在 `dependency-audit-before.json`；没有忽略公告 |
 | 外部服务与生产切换 | 未执行 | 未配置实际 GitHub App、Neon、Blob、Turnstile、Resend 与 Vercel 生产服务；未切换域名 |
 
 当前证据目录为 `/workspace/.firefly-environment/`，其中日志、JSON 和截图不会自动随 Git 保存或进入新云实例；会话文件不用于交付。最终结果与新增验证由实际运行者更新，未记录结果仍视为未完成。

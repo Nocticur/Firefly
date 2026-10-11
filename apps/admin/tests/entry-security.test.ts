@@ -6,7 +6,7 @@ import { ApiFailure } from "../server/security.js";
 test("entry credentials expire, reject forgery and bind password, site and environment", async (t) => {
 	const variables = ["ADMIN_ENTRY_PASSWORD", "APP_ENV", "VERCEL_ENV", "GITHUB_REPOSITORY", "ADMIN_DEV_ORIGIN", "ADMIN_PREVIEW_ORIGIN"] as const;
 	const previous = Object.fromEntries(variables.map((key) => [key, process.env[key]]));
-	process.env.ADMIN_ENTRY_PASSWORD = "synthetic-entry-password-only-for-tests";
+	process.env.ADMIN_ENTRY_PASSWORD = "testOnly42";
 	process.env.APP_ENV = "development"; delete process.env.VERCEL_ENV;
 	process.env.GITHUB_REPOSITORY = "tests/entry-security";
 	process.env.ADMIN_DEV_ORIGIN = "http://localhost:3000";
@@ -33,7 +33,7 @@ test("entry credentials expire, reject forgery and bind password, site and envir
 		});
 		await t.test("password rotation invalidates existing credentials", () => {
 			const original = process.env.ADMIN_ENTRY_PASSWORD;
-			process.env.ADMIN_ENTRY_PASSWORD = "different-test-only-password-after-rotation";
+			process.env.ADMIN_ENTRY_PASSWORD = "newOnly42!";
 			assert.equal(entryVerified(request(token), now), false);
 			assert.equal(entryVerified(request(issueEntryToken(now)), now), true);
 			process.env.ADMIN_ENTRY_PASSWORD = original;
@@ -49,8 +49,8 @@ test("entry credentials expire, reject forgery and bind password, site and envir
 			assert.equal(entryVerified(request(token), now), false);
 			process.env.APP_ENV = "development";
 		});
-		await t.test("unconfigured and weak passwords keep the entry closed", () => {
-			for (const value of [undefined, "", "too-short", " ".repeat(16), "界".repeat(86)]) {
+		await t.test("unconfigured and passwords outside 3–10 characters keep the entry closed", () => {
+			for (const value of [undefined, "", "ab", "x".repeat(11), " ".repeat(3), "界".repeat(11)]) {
 				if (value === undefined) delete process.env.ADMIN_ENTRY_PASSWORD; else process.env.ADMIN_ENTRY_PASSWORD = value;
 				assert.throws(() => issueEntryToken(now), (error: unknown) => error instanceof ApiFailure && error.status === 503 && error.code === "ENTRY_CONFIGURATION_REQUIRED");
 			}

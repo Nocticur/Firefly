@@ -1,8 +1,8 @@
 # Nocticur 的 Firefly 博客与管理后台
 
-配置时先查阅 [环境变量填写清单](./environment-variables.md)，区分博客构建变量与后台服务凭据。安全复审及其验证边界见 [安全复审报告](./security-review.md)。
+配置时先查阅 [环境变量填写清单](./environment-variables.md)，区分博客构建变量与后台服务凭据。最新凭据、权限、后台进程与数据访问结论见 [最终安全检查](./final-security-review.md)；此前迁移复审及其边界见 [安全复审报告](./security-review.md)。
 
-后台部署到 Vercel Hobby，配套服务只选择免费方案，具体约束见 [免费部署说明](./free-deployment.md)。博客作者卡片和手机导航菜单提供“后台管理”入口；只验证管理项目的 `ADMIN_ENTRY_PASSWORD`，正确后直接进入，无需用户名或 GitHub 登录。进入页提供与博客一致的头像、签名、淡青柔粉配色和深浅主题。
+后台部署到 Vercel Hobby，配套服务只选择免费方案，具体约束见 [免费部署说明](./free-deployment.md)。博客作者卡片和手机导航菜单提供“后台管理”入口；只验证管理项目的 `ADMIN_ENTRY_PASSWORD`（3～10 个字符，服务端自动加盐 scrypt 哈希），正确后直接进入，无需用户名或 GitHub 登录。进入页提供与博客一致的头像、签名、淡青柔粉配色和深浅主题。
 
 本次选择 `Nocticur/Firefly` 与 Vercel 方案，发布分支为 `master`。博客保持 Astro 静态站点；管理界面、Hono API 与 Workflow 在独立 Vercel 项目运行。生产目标地址为 `https://blog.mourn.top/` 和 `https://admin.mourn.top/`。
 
@@ -19,7 +19,7 @@
 | 资料与主题 | 迁入身份、两行签名、原头像、两篇文章与固定中文地址；保留主题布局、功能开关、原文章和草稿 | `src/config/`、`src/content/posts/`、`src/content/spec/about.md`、`public/assets/images/logo-nocticur.png` |
 | 管理界面 | 仪表盘、文章与历史、设置、导航与六个图标位、媒体、评论、友链、发布、维护；响应式页面与未保存提示 | `apps/admin/client/` |
 | 写作 | TipTap 可视编辑、斜杠菜单、链接、代码、公式、Mermaid、表格；完整源码和未知片段保护 | `apps/admin/client/components/ArticleEditor.tsx`、`apps/admin/server/content.ts` |
-| 登录与数据 | 服务端密码验证后直接建立会话；安全 Cookie、持久限流、会话轮换和 CSRF；隔离 PostgreSQL 与顺序迁移 | `apps/admin/server/entry.ts`、`apps/admin/server/session.ts`、`apps/admin/server/auth.ts`、`apps/admin/server/security.ts`、`apps/admin/migrations/` |
+| 登录与数据 | 服务端自动加盐哈希验证密码后直接建立会话；安全 Cookie、持久限流、会话轮换和 CSRF；隔离 PostgreSQL 与顺序迁移 | `apps/admin/server/entry.ts`、`apps/admin/server/password.ts`、`apps/admin/server/session.ts`、`apps/admin/server/auth.ts`、`apps/admin/server/security.ts`、`apps/admin/migrations/` |
 | 媒体 | 受限直传、签名完成回调、私有鉴权读取、外链导入；冻结媒体校验与公开不可变副本 | `apps/admin/server/media.ts` |
 | 发布 | SQL 持久任务、冻结快照、租约 fencing、GitHub 原子提交、Workflow 等待、生产别名及清单核验；旧 slug 的永久重定向随配置提交 | `apps/admin/server/releases.ts`、`apps/admin/server/github.ts`、`apps/admin/workflows/`、`scripts/generate-release-manifest.ts` |
 | 互动与通知 | 纯文本评论、Turnstile、限流、封禁、回复占位；友链审核、分组与生产上线通知；Resend 唯一通知及未知结果核查 | `apps/admin/server/interactions.ts`、`apps/admin/server/mail.ts` |

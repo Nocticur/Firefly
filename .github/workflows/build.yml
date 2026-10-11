@@ -35,6 +35,8 @@ jobs:
       ASTRO_TELEMETRY_DISABLED: '1'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
         with:
           run_install: false
@@ -49,6 +51,7 @@ jobs:
       - run: pnpm --filter @nocticur/admin type-check
       - run: pnpm --filter @nocticur/admin test
       - run: pnpm --filter @nocticur/admin exec tsx --test ../../scripts/generate-release-manifest.test.ts
+      - run: pnpm --filter @nocticur/admin exec tsx --test ../../scripts/crypto-utils.test.ts
       - run: pnpm build
       - run: NITRO_PRESET=vercel pnpm --filter @nocticur/admin build
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

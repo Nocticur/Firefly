@@ -24,7 +24,7 @@
 | --- | --- | --- |
 | `APP_ENV` | 各环境必填 | Production 填 `production`，Preview 填 `preview`，本地填 `development`；与平台 `VERCEL_ENV` 一致 |
 | `GITHUB_REPOSITORY` | 固定值 | `Nocticur/Firefly`，用于站点/环境数据命名空间；发布目标固定为该仓库 `master` |
-| `ADMIN_ENTRY_PASSWORD` | 登录必填，秘密 | 你自行设置的后台入口密码，至少 12 个字符、UTF-8 最多 256 字节；建议密码管理器生成 16 位以上随机密码。仅在**管理项目**填写，不加 `PUBLIC_` / `VITE_` 前缀，各环境使用不同值 |
+| `ADMIN_ENTRY_PASSWORD` | 登录必填，秘密 | 你自行设置的后台入口密码，3～10 个字符；后台自动生成加盐 scrypt 哈希进行验证，无需手动加密，建议选择 10 位随机密码。仅在**管理项目**填写，不加 `PUBLIC_` / `VITE_` 前缀，各环境使用不同值 |
 | `ADMIN_ORIGIN` | Production 固定值 | `https://admin.mourn.top`，后台 HTTPS origin，不含末尾 `/` |
 | `PUBLIC_SITE_ORIGIN` | Production 固定值 | `https://blog.mourn.top`，博客 HTTPS origin，不含末尾 `/` |
 | `ADMIN_PRODUCTION_DATABASE_URL` | 后台必填，秘密 | Neon 生产 PostgreSQL TLS 连接串，保存草稿、历史、会话、任务和通知。也接受 Marketplace 别名 `DATABASE_URL`，两者无需重复填 |
@@ -35,6 +35,8 @@
 博客作者卡片和手机导航菜单的“后台管理”按钮指向 `https://admin.mourn.top/`。只需输入 `ADMIN_ENTRY_PASSWORD`，正确后直接进入后台，无需用户名或第三方账号。密码未配置、过短或超长时入口关闭。登录自动建立有效 12 小时的数据库会话与 HttpOnly / Secure Cookie；旧 GitHub 登录会话不再有效，须重新输入密码。修改密码并重新部署后旧入口凭证失效；退出登录撤销会话并清除两种 Cookie。密码不写入数据库、Git 或浏览器存储。
 
 Vercel 保存新变量后，重新部署**管理项目**，现有部署不会自动更新密码。保持 Hobby 免费套餐；免费服务选择及额度约束见 [免费部署说明](./free-deployment.md)。
+
+`ADMIN_ENTRY_PASSWORD` 直接填写原密码；后台自动添加随机盐并用 scrypt 生成不可逆哈希，登录时异步计算候选哈希并恒定时间比较。原密码仍作为平台秘密变量保存，不会被程序改写成环境变量中的哈希；后台缓存只保留派生值，不额外缓存明文。哈希无需填写，也不作为可用于登录的密码。中文和 emoji 按 Unicode 字符计数，空格保留但全空白密码不允许。
 
 ## 管理项目：GitHub 仓库操作
 

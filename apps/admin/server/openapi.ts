@@ -18,7 +18,7 @@ const string = { type: "string" }; const revision = { type: "integer", minimum: 
 route("get", "/api/health", "System", "Runtime health (does not claim service readiness)", true);
 route("get", "/api/openapi.json", "System", "API specification", true);
 route("get", "/api/auth/entry", "Authentication", "Read entry verification status without revealing credentials", true);
-route("post", "/api/auth/entry", "Authentication", "Verify server-side password and create an administrator session; requires same Origin and persistent rate limits", true, { password: { type: "string", minLength: 1, maxLength: 256, writeOnly: true } }, ["password"]);
+route("post", "/api/auth/entry", "Authentication", "Verify a 3–10 character password against an automatically salted scrypt hash and create an administrator session; requires same Origin and persistent rate limits", true, { password: { type: "string", minLength: 3, maxLength: 10, writeOnly: true } }, ["password"]);
 route("get", "/api/auth/session", "Authentication", "Current administrator and CSRF token");
 route("post", "/api/auth/logout", "Authentication", "Revoke current session");
 route("get", "/api/posts", "Content", "List private management records");

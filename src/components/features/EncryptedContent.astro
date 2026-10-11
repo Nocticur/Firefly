@@ -13,7 +13,7 @@ interface Props {
 const { password, slug, hint = "" } = Astro.props;
 
 const rawHtml = await Astro.slots.render("default");
-const encryptedData = encryptContent(rawHtml, password, slug);
+const encryptedData = encryptContent(rawHtml, password);
 
 const labels = {
 	protected: i18n(I18nKey.passwordProtected),
@@ -84,6 +84,8 @@ const labels = {
   var encryptedData = container.getAttribute('data-encrypted');
   var slug = container.getAttribute('data-slug');
   var cacheKey = 'pw:' + slug;
+  // Remove legacy password caches without reading or reusing their contents.
+  try { sessionStorage.removeItem(cacheKey); } catch (_) {}
 
   var ui = document.getElementById('password-ui');
   var form = document.getElementById('password-form');
@@ -181,25 +183,16 @@ const labels = {
   // Handle form submit
   form.addEventListener('submit', function(e) {
     e.preventDefault();
-    var pwd = input.value.trim();
+    var pwd = input.value;
     if (!pwd) return;
+    input.value = '';
     hideError();
     decrypt(pwd).then(function(html) {
-      sessionStorage.setItem(cacheKey, pwd);
       showContent(html);
     }).catch(function() {
       showError();
     });
   });
 
-  // Try cached password
-  var cached = sessionStorage.getItem(cacheKey);
-  if (cached) {
-    decrypt(cached).then(function(html) {
-      showContent(html);
-    }).catch(function() {
-      sessionStorage.removeItem(cacheKey);
-    });
-  }
 })();
 </script>

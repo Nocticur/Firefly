@@ -8,9 +8,9 @@
 
 - 迁入 Nocticur 资料、原头像与约定两篇文章；保留原 14 条记录及草稿状态，16 条管理记录、15 篇公开文章。
 - 后台、持久发布、媒体、互动、邮件及维护功能已实现；永久重定向随根 `vercel.json` 和内容清单原子提交，精确管理规则优先于其他规则。
-- 后台完整测试 180 通过、0 失败、0 跳过；发布清单测试 13 通过、0 失败、0 跳过。博客 check 为 272 文件、零 error/warning/hint；根与后台类型检查均通过。
+- 后台完整测试 231 通过、0 失败、0 跳过；发布清单测试 13 通过、0 失败、0 跳过，文章加密测试 3 项通过。博客 check 为 273 文件、零 error/warning/hint；根与后台类型检查均通过。
 - 完整博客构建通过：42 个生成路由、15 篇公开文章、33 个 Pagefind 文件。Nitro Vercel 构建通过，包含 20 steps / 3 workflows。
-- 编译后 Node 函数 6 项、密码直接登录浏览器 10 项、本地 9 个管理页面与移动端、两个中文 slug、订阅与实际搜索 12 项、编辑器 8 项实际交互均通过；没有保存试验编辑，未知 YAML 和原文章文件均保留。具体证据见 [acceptance.md](./acceptance.md)。
+- 编译后 Node 函数 6 项、密码直接登录浏览器 11 项、本地 9 个管理页面与移动端、两个中文 slug、订阅与实际搜索 12 项、编辑器 8 项实际交互均通过；没有保存试验编辑，未知 YAML 和原文章文件均保留。另有 4 项文章密码缓存/敏感权限/外发浏览器检查通过；完整凭据、授权和后台任务审查见 [final-security-review.md](./final-security-review.md)。具体证据见 [acceptance.md](./acceptance.md)。
 - 可复用安装、启动说明与完整提案在 `/workspace/.firefly-environment/setup-transfer.json`；交接包为 `/workspace/firefly-setup-handoff.tar.gz`。最新环境草稿此前保存遇到 `stale_base`，尚未保存到当前配置。
 
 ## 交付与后续任务

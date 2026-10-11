@@ -2,7 +2,7 @@
 
 本说明对应已选择的 Firefly 方案。先完成服务配置，在已确定的 Production 配置中按验收需要分别开启发布、邮件和维护；完成 [acceptance.md](./acceptance.md) 平台验收后再投入正式运行。实际秘密值填写在 Vercel / GitHub / Neon / Resend 的安全配置页面，不发送到聊天，不写入仓库、构建产物或日志。
 
-本项目按用户要求使用 **Vercel Hobby 免费套餐**部署，配套服务选择 Free；不升级 Pro，不购买附加项。先阅读 [免费部署说明](./free-deployment.md)。后台只验证管理项目的 `ADMIN_ENTRY_PASSWORD`，正确后直接进入；至少 12 个字符，建议随机 16 位以上。添加或更换密码后重新部署管理项目。
+本项目按用户要求使用 **Vercel Hobby 免费套餐**部署，配套服务选择 Free；不升级 Pro，不购买附加项。先阅读 [免费部署说明](./free-deployment.md)。后台只验证管理项目的 `ADMIN_ENTRY_PASSWORD`，正确后直接进入；支持 3～10 个字符，后台自动生成加盐哈希校验。添加或更换密码后重新部署管理项目。
 
 ## 两个 Vercel 项目
 
@@ -37,7 +37,7 @@
 | 变量 | 用途与范围 |
 | --- | --- |
 | `GITHUB_REPOSITORY` | 固定 `Nocticur/Firefly`，用于站点环境 ID；发布提供者绑定此仓库和 `master` |
-| `ADMIN_ENTRY_PASSWORD` | 服务端管理密码，至少 12 个字符；正确后直接建立后台会话，各环境使用不同值 |
+| `ADMIN_ENTRY_PASSWORD` | 服务端管理密码，3～10 个字符；正确后直接建立后台会话，各环境使用不同值 |
 | `ADMIN_ORIGIN` / `PUBLIC_SITE_ORIGIN` | 固定 `https://admin.mourn.top` / `https://blog.mourn.top`，不含末尾 `/` |
 | `ADMIN_PREVIEW_ORIGIN` / `PUBLIC_PREVIEW_ORIGIN` | 当前隔离 Preview 的精确 HTTPS origin |
 | `ADMIN_DEV_ORIGIN` / `PUBLIC_DEV_ORIGIN` | 本地开发 origin；默认 `http://localhost:3000` / `http://localhost:4321` |
@@ -81,6 +81,8 @@ pnpm --filter @nocticur/admin db:migrate
 ## 密码登录与 GitHub 原子提交
 
 管理项目只需配置 `ADMIN_ENTRY_PASSWORD` 及本节之前的环境、origin 和数据库变量。输入正确密码后直接建立 12 小时会话，无需用户名、GitHub OAuth App 或管理员数字 ID。管理域名必须已有有效 HTTPS；服务端校验登录来源并持久限流，后续管理写入继续校验 Origin 与 CSRF。退出登录撤销会话；更换密码并重新部署后旧凭证失效。旧 OAuth 登录和回调路由已移除，旧 GitHub 会话须重新输入密码。
+
+直接填写 3～10 个字符的原密码，后台自动使用随机盐和 scrypt 生成不可逆哈希校验；不需要手动生成或填写哈希。平台环境变量仍保存原值，服务端缓存只保留派生值。建议选择 10 位随机密码；加盐哈希不会增加短密码本身的猜测空间。
 
 导入与发布内容时另建 GitHub App，安装范围只选 `Nocticur/Firefly`，Repository permissions 的 Contents 允许 read/write，Metadata 使用 GitHub 所需读取权限。读基线请求申请只读 Contents 令牌；生产发布临时申请写令牌，以 `expectedHeadOid` 的 GraphQL 原子提交更新 `master`。不要用用户 PAT 代替仓库写入身份；App 配置不参与密码登录。
 

@@ -22,7 +22,7 @@ test("Password login counters persist, serialize concurrent requests and clean e
 	process.env.APP_ENV = "development"; delete process.env.VERCEL_ENV; delete process.env.VERCEL;
 	process.env.ADMIN_DEVELOPMENT_DATABASE_URL = databaseUrl;
 	process.env.GITHUB_REPOSITORY = `tests/login-${randomUUID()}`;
-	process.env.ADMIN_ENTRY_PASSWORD = "isolated-test-only-password-login";
+	process.env.ADMIN_ENTRY_PASSWORD = "rateOnly42";
 	const db = createDatabase(databaseUrl!); const second = createDatabase(databaseUrl!);
 	const site = getSiteId(); const globalSite = `${site}-global`; const productionSite = `${site}-proxy`;
 	const sites = [site, globalSite, productionSite];
