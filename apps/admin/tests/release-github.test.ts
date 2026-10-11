@@ -194,6 +194,22 @@ test("repository import includes only the exact root deployment config at the fr
 	});
 });
 
+test("historical repository evidence reads its explicit immutable SHA without reading master", async () => {
+	await mockGitHub((call) => {
+		if (call.url.pathname === `/repos/Nocticur/Firefly/git/trees/${baseSha}`) return Response.json({ truncated: false, tree: [{ path: files[0].path, type: "blob", sha: commitSha }] });
+		assert.equal(call.url.pathname, `/repos/Nocticur/Firefly/git/blobs/${commitSha}`);
+		return Response.json({ encoding: "base64", content: Buffer.from(files[0].source).toString("base64") });
+	}, async (calls) => {
+		assert.deepEqual(await githubProvider.readRepositoryFiles(baseSha), { headSha: baseSha, files });
+		assert.equal(calls.some((call) => call.url.pathname.endsWith("/git/ref/heads/master")), false);
+		for (const call of calls.filter((entry) => entry.body)) assert.deepEqual(call.body?.permissions, { contents: "read" });
+	});
+	await mockGitHub(() => { throw new Error("invalid revision must not request GitHub"); }, async (calls) => {
+		await assert.rejects(() => githubProvider.readRepositoryFiles("master"), (error) => githubError(error, { status: 400 }));
+		assert.equal(calls.length, 0);
+	});
+});
+
 test("deployment config and matching managed redirects are committed atomically while preserving other frozen fields", async () => {
 	const redirects = [{ from: "/posts/old/", to: "/posts/new/", permanent: true }];
 	const config = {

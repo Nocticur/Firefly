@@ -85,18 +85,40 @@ export async function validateImportUrl(raw: string): Promise<{ url: URL; addres
 	if (!addresses.length || addresses.some((entry) => !isPublicAddress(entry.address))) throw new ApiFailure(400, "MEDIA_IMPORT_ADDRESS_DENIED", "媒体地址不能访问内网或保留地址");
 	return { url, address: addresses[0]!.address, family: addresses[0]!.family };
 }
-async function importBytes(raw: string): Promise<Buffer> {
-	const target = await validateImportUrl(raw);
-	return await new Promise<Buffer>((resolve, reject) => {
-		const request = httpsRequest(target.url, { method: "GET", lookup: (_hostname, options, callback) => options.all ? callback(null, [{ address: target.address, family: target.family }]) : callback(null, target.address, target.family), headers: { Accept: "image/*", "Accept-Encoding": "identity" }, timeout: 15000 }, (response) => {
-			if (response.statusCode !== 200) { response.destroy(); reject(new ApiFailure(400, "MEDIA_IMPORT_FAILED", "外链必须直接返回图片，禁止跳转")); return; }
-			if (Number(response.headers["content-length"] || 0) > MAX_MEDIA_SIZE) { response.destroy(); reject(new ApiFailure(413, "MEDIA_TOO_LARGE", "媒体超过大小限制")); return; }
-			const chunks: Buffer[] = []; let size = 0;
-			response.on("data", (chunk: Buffer) => { size += chunk.length; if (size > MAX_MEDIA_SIZE) { response.destroy(new ApiFailure(413, "MEDIA_TOO_LARGE", "媒体超过大小限制")); } else chunks.push(chunk); });
-			response.on("end", () => resolve(Buffer.concat(chunks))); response.on("error", reject);
-		});
-		request.on("timeout", () => request.destroy(new ApiFailure(504, "MEDIA_IMPORT_TIMEOUT", "媒体导入超时"))); request.on("error", reject); request.end();
-	});
+type ImportOptions = { timeoutMs?: number; validateUrl?: typeof validateImportUrl; request?: typeof httpsRequest };
+export async function importBytes(raw: string, options: ImportOptions = {}): Promise<Buffer> {
+	// Socket timeouts only detect idle peers. Bound DNS, TLS and the entire body too.
+	const timeoutMs = options.timeoutMs ?? 30_000;
+	if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new TypeError("Invalid media import timeout");
+	const controller = new AbortController();
+	const failure = new ApiFailure(504, "MEDIA_IMPORT_TIMEOUT", "媒体导入超时");
+	let rejectDeadline!: (reason: unknown) => void;
+	const deadline = new Promise<never>((_, reject) => { rejectDeadline = reject; });
+	const expire = () => rejectDeadline(controller.signal.reason);
+	controller.signal.addEventListener("abort", expire, { once: true });
+	const timer = setTimeout(() => controller.abort(failure), timeoutMs);
+	try {
+		const target = await Promise.race([(options.validateUrl || validateImportUrl)(raw), deadline]);
+		return await Promise.race([
+			new Promise<Buffer>((resolve, reject) => {
+				const request = (options.request || httpsRequest)(target.url, { method: "GET", signal: controller.signal, lookup: (_hostname, options, callback) => options.all ? callback(null, [{ address: target.address, family: target.family }]) : callback(null, target.address, target.family), headers: { Accept: "image/*", "Accept-Encoding": "identity" }, timeout: 15000 }, (response) => {
+					if (response.statusCode !== 200) { response.destroy(); reject(new ApiFailure(400, "MEDIA_IMPORT_FAILED", "外链必须直接返回图片，禁止跳转")); return; }
+					if (Number(response.headers["content-length"] || 0) > MAX_MEDIA_SIZE) { response.destroy(); reject(new ApiFailure(413, "MEDIA_TOO_LARGE", "媒体超过大小限制")); return; }
+					const chunks: Buffer[] = []; let size = 0;
+					response.on("data", (chunk: Buffer) => { size += chunk.length; if (size > MAX_MEDIA_SIZE) { response.destroy(new ApiFailure(413, "MEDIA_TOO_LARGE", "媒体超过大小限制")); } else chunks.push(chunk); });
+					response.on("end", () => resolve(Buffer.concat(chunks))); response.on("error", reject);
+				});
+				request.on("timeout", () => request.destroy(new ApiFailure(504, "MEDIA_IMPORT_TIMEOUT", "媒体导入超时"))); request.on("error", reject); request.end();
+			}),
+			deadline,
+		]);
+	} catch (error) {
+		if (controller.signal.aborted) throw failure;
+		throw error;
+	} finally {
+		clearTimeout(timer);
+		controller.signal.removeEventListener("abort", expire);
+	}
 }
 
 export type FrozenMedia = Record<string, unknown> & { id: string; pathname: string; digest: string; size: number; contentType: string; revision: number };

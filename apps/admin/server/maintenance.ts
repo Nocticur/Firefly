@@ -7,7 +7,7 @@ import { getDatabase, getSiteId, createDatabase, type Database } from "./db.js";
 import { requireAdmin } from "./auth.js";
 import { ApiFailure, constantTimeEqual, productionEnvironment, readJson, runtimeEnvironment } from "./security.js";
 import { blobToken } from "./media.js";
-import { processReleaseTask, taskRecord } from "./releases.js";
+import { processReleaseTask, reconcileVerifiedReleaseNotifications, taskRecord } from "./releases.js";
 import { maintenanceWorkflow } from "../workflows/maintenance.js";
 import { checkUpdates } from "./update-check.js";
 
@@ -35,7 +35,7 @@ const privateBackupBlob: BackupBlobProvider = {
 export type MaintenanceDependencies = {
 	db?: Database; site?: string; blob?: BackupBlobProvider; skipCapabilityCheck?: boolean;
 	createIsolation?: (url: string) => Database; liveDatabaseUrl?: string; restoreDatabaseUrl?: string;
-	processPublish?: (id: string) => Promise<unknown>; deliverMail?: () => Promise<unknown>;
+	processPublish?: (id: string) => Promise<unknown>; deliverMail?: () => Promise<unknown>; reconcileNotifications?: () => Promise<void>;
 };
 class LeaseLost extends Error {}
 function assertMaintenance(): void {
@@ -207,8 +207,9 @@ export async function restoreBackup(backupId: string, taskId: string, dependenci
 			for (const current of currentMail) {
 				const restored = backup.tables.mail_outbox.find((row) => row.id === current.id);
 				if (restored && (restored.notification_key !== current.notification_key || restored.recipient !== current.recipient)) throw new Error("Restored mail identity does not match the live ledger");
-				if (restored && current.status === "sent") Object.assign(restored, current);
-				else if (!restored) backup.tables.mail_outbox.push({ ...current, ...(current.status === "sent" ? {} : { status: "blocked", claimed_at: null, last_error: "restored: reconcile provider result before sending" }) });
+				const providerReceipt = current.status === "sent" || current.status === "failed" && Boolean(current.provider_id);
+				if (restored && providerReceipt) Object.assign(restored, current);
+				else if (!restored) backup.tables.mail_outbox.push({ ...current, ...(providerReceipt ? {} : { status: "blocked", claimed_at: null, last_error: "restored: reconcile provider result before sending" }) });
 				else if (current.provider_id && !restored.provider_id) restored.provider_id = current.provider_id;
 			}
 			// A separate transaction durably records the safety backup while this
@@ -244,7 +245,18 @@ export async function processMaintenanceTask(id: string, dependencies: Maintenan
 	const lease = await claimMaintenanceTask(db, site, id); if (!lease) return { done: false, state: "queued" };
 	try {
 		await heartbeat(db, site, lease);
-		if (task.kind === "backup" || task.kind === "daily") await createBackup(id, db, site, { blob: dependencies.blob });
+		if (task.kind === "backup") await createBackup(id, db, site, { blob: dependencies.blob });
+		if (task.kind === "daily") {
+			// Notification receipts belong to already verified deployments. Repair them
+			// independently of backups and the switch that enables new Git publications.
+			const failures: unknown[] = [];
+			try { await createBackup(id, db, site, { blob: dependencies.blob }); } catch (error) { failures.push(error); }
+			try {
+				await heartbeat(db, site, lease);
+				await (dependencies.reconcileNotifications || (() => reconcileVerifiedReleaseNotifications(db, site)))();
+			} catch (error) { failures.push(error); }
+			if (failures.length) throw failures[0];
+		}
 		if (task.kind === "restore") await restoreBackup(String((task.details as Row).backupId), id, dependencies, lease);
 		if (task.kind === "daily") {
 			if (process.env.ENABLE_PRODUCTION_PUBLISH === "true") {

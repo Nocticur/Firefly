@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { Resend } from "resend";
 import { createDatabase, type Database } from "../server/db.js";
 import { ApiFailure } from "../server/security.js";
 import { createBackup, processMaintenanceTask, type BackupBlobProvider, type MaintenanceDependencies } from "../server/maintenance.js";
+import { deliverMail, processResendWebhook, reconcileMail, type MailDependencies, type MailProvider } from "../server/mail.js";
 
 const databaseUrl = process.env.ADMIN_TEST_DATABASE_URL;
 type Row = Record<string, unknown>;
@@ -112,6 +114,63 @@ test("maintenance is fenced, idempotent and restores without replaying providers
 			const publishes: string[] = []; let mail = 0;
 			const result = await processMaintenanceTask(id, { db, site: currentSite, blob, skipCapabilityCheck: true, processPublish: async (publishId) => { publishes.push(publishId); }, deliverMail: async () => { mail++; } });
 			assert.deepEqual(result, { done: true, state: "verified" }); assert.deepEqual(publishes, [normal]); assert.equal(mail, 0);
+		});
+		await t.test("daily notification repair runs with publishing disabled and a failed backup", async () => {
+			const currentSite = site(); const blob = new MemoryBlob(); const id = await task(db, currentSite, "daily");
+			blob.onPut = async (pathname, bytes) => { blob.objects.set(pathname, Buffer.alloc(bytes.length, 120)); };
+			process.env.ENABLE_PRODUCTION_PUBLISH = "false"; process.env.ENABLE_PRODUCTION_EMAIL = "false";
+			let notifications = 0; let publishes = 0; let emails = 0;
+			const result = await processMaintenanceTask(id, { db, site: currentSite, blob, skipCapabilityCheck: true, reconcileNotifications: async () => { notifications++; }, processPublish: async () => { publishes++; }, deliverMail: async () => { emails++; } });
+			assert.deepEqual(result, { done: true, state: "failed" }); assert.equal(notifications, 1); assert.equal(publishes, 0); assert.equal(emails, 0);
+			assert.equal((await db.query<Row>("SELECT state FROM maintenance_backups WHERE site_id=$1 AND id=$2", [currentSite, id]))[0].state, "writing");
+		});
+		await t.test("failed daily notification repair keeps its successful verified backup", async () => {
+			const currentSite = site(); const blob = new MemoryBlob(); const id = await task(db, currentSite, "daily");
+			let notifications = 0;
+			const result = await processMaintenanceTask(id, { db, site: currentSite, blob, skipCapabilityCheck: true, reconcileNotifications: async () => { notifications++; throw new Error("notification record remains pending"); } });
+			assert.deepEqual(result, { done: true, state: "failed" }); assert.equal(notifications, 1);
+			assert.equal((await db.query<Row>("SELECT state FROM maintenance_backups WHERE site_id=$1 AND id=$2", [currentSite, id]))[0].state, "verified");
+		});
+		await t.test("restore preserves signed post-backup bounce and complaint facts without retrying mail", async () => {
+			const currentSite = site(); const blob = new MemoryBlob(); const backupId = randomUUID();
+			const secretBytes = Buffer.from("restore audit test signing secret, no provider credentials");
+			const webhookSecret = `whsec_${secretBytes.toString("base64")}`;
+			const provider: MailProvider = {
+				emails: {
+					async send() { throw new Error("Restored failure must never send again"); },
+					async list() { throw new Error("Signed terminal receipt does not need provider searching"); },
+					async get() { throw new Error("Signed terminal receipt does not need provider searching"); },
+				},
+				webhooks: new Resend("re_test_not_a_real_credential").webhooks,
+			};
+			const mail: MailDependencies = { db, site: currentSite, provider, webhookSecret };
+			const cases = [
+				{ id: randomUUID(), initial: "sent", event: "email.bounced", details: { bounce: { message: "邮箱不存在" } }, createdAfterBackup: false },
+				{ id: randomUUID(), initial: "sent", event: "email.complained", details: {}, createdAfterBackup: false },
+				{ id: randomUUID(), initial: "pending", event: "email.failed", details: { failed: { reason: "provider failure after backup" } }, createdAfterBackup: false },
+				{ id: randomUUID(), initial: "pending", event: "email.bounced", details: { bounce: { message: "new notification failed" } }, createdAfterBackup: true },
+			];
+			const seed = async (entry: typeof cases[number]) => { await db.query("INSERT INTO mail_outbox(site_id,id,notification_key,recipient,subject,text_body,status) VALUES($1,$2,$2,'receipt@example.invalid','Frozen receipt','private',$3)", [currentSite, entry.id, entry.initial]); };
+			const callback = async (entry: typeof cases[number], type = entry.event) => {
+				const payload = JSON.stringify({ type, data: { email_id: `provider-${entry.id}`, to: ["receipt@example.invalid"], subject: "Frozen receipt", tags: { notification_id: entry.id }, ...entry.details } });
+				const headers = { id: `msg_${randomUUID()}`, timestamp: String(Math.floor(Date.now() / 1000)), signature: "" };
+				headers.signature = `v1,${createHmac("sha256", secretBytes).update(`${headers.id}.${headers.timestamp}.${payload}`).digest("base64")}`;
+				await processResendWebhook(payload, headers, mail);
+			};
+			for (const entry of cases) if (!entry.createdAfterBackup) await seed(entry);
+			await createBackup(backupId, db, currentSite, { blob });
+			for (const entry of cases) { if (entry.createdAfterBackup) await seed(entry); await callback(entry); }
+			const before = await db.query<Row>("SELECT * FROM mail_outbox WHERE site_id=$1 ORDER BY id", [currentSite]);
+			assert.ok(before.every((row) => row.status === "failed" && row.provider_id && row.last_error));
+			const restoreId = await task(db, currentSite, "restore", "queued", { backupId });
+			assert.deepEqual(await processMaintenanceTask(restoreId, { db, site: currentSite, blob, skipCapabilityCheck: true, liveDatabaseUrl: databaseUrl, restoreDatabaseUrl: isolationUrl.toString() }), { done: true, state: "verified" });
+			assert.deepEqual(await db.query<Row>("SELECT * FROM mail_outbox WHERE site_id=$1 ORDER BY id", [currentSite]), before);
+			for (const entry of cases) {
+				await callback(entry, "email.sent");
+				assert.equal(await reconcileMail(entry.id, undefined, mail), "failed");
+				assert.deepEqual(await deliverMail(entry.id, mail), { state: "failed" });
+			}
+			assert.deepEqual(await db.query<Row>("SELECT * FROM mail_outbox WHERE site_id=$1 ORDER BY id", [currentSite]), before);
 		});
 		await t.test("restore gates all live writes, retains safety backup and blocks old Git/mail/workflow replay", async () => {
 			const currentSite = site(); const blob = new MemoryBlob(); const backupId = randomUUID();

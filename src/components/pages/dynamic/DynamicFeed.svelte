@@ -14,6 +14,7 @@ type DynamicImage = {
 
 type DynamicData = {
 	id: string;
+		example?: boolean;
 	published: number;
 	html: string;
 	images: DynamicImage[];
@@ -135,6 +136,15 @@ function createItem(entry: DynamicData) {
 		author.id = `${anchorId}-author`;
 		root.querySelector("article")?.setAttribute("aria-labelledby", author.id);
 	}
+		if (entry.example === true && !memos?.enable && !source.startsWith("http")) {
+			if (author) author.textContent = "主题示例";
+			root.querySelector<HTMLElement>("[data-dynamic-avatar]")?.setAttribute("hidden", "");
+			root.querySelector<HTMLElement>("[data-dynamic-example-avatar]")?.removeAttribute("hidden");
+			root.querySelector<HTMLElement>("[data-dynamic-example-label]")?.removeAttribute("hidden");
+			const authorLink = root.querySelector<HTMLAnchorElement>("[data-dynamic-author-link]");
+			authorLink?.removeAttribute("href");
+			authorLink?.removeAttribute("aria-label");
+		}
 	root
 		.querySelectorAll<HTMLAnchorElement>("[data-dynamic-permalink]")
 		.forEach((link) => {

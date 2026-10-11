@@ -71,3 +71,14 @@ test("advanced table schema retains spans and rejects unknown active HTML", () =
 		assert.equal(combineEditedBody(analysis, analysis.body), original);
 	}
 });
+
+test("invalid numeric HTML entities retain table source without crashing the editor", () => {
+	for (const entity of ["&#9999999999;", "&#x110000;", "&#xD800;", "&#0;"]) {
+		const original = `<table><tbody><tr><td><img src="https://example.com/${entity}"></td></tr></tbody></table>`;
+		assert.equal(isSafeTableHTML(original), false);
+		const analysis = analyzeSource(original);
+		assert.equal(analysis.safe, false);
+		assert.equal(combineEditedBody(analysis, analysis.body), original);
+	}
+	assert.equal(isSafeTableHTML('<table><tbody><tr><td><img src="https://example.com/&#x1f600;.png"></td></tr></tbody></table>'), true);
+});

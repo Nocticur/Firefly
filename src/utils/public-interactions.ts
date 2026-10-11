@@ -7,6 +7,11 @@ export type PublicComment = {
 	status: "visible" | "deleted";
 	createdAt: string;
 };
+export type PublicCommentPage = {
+	data: PublicComment[];
+	nextCursor: string | null;
+};
+export type TurnstileAction = "comments" | "friend_request";
 
 export type PublicFriend = {
 	id: string;
@@ -140,9 +145,7 @@ async function request(
 			credentials: "omit",
 		});
 		if (!response.ok) throw responseError(response.status);
-		return init.method === "POST"
-			? await response.text()
-			: await response.json();
+		return await response.json();
 	} catch (error) {
 		if (signal?.aborted) throw error;
 		if (controller.signal.aborted)
@@ -159,17 +162,46 @@ async function request(
 }
 
 /** Whitelist public fields here; private email addresses never reach rendered data. */
+export async function fetchPublicCommentPage(
+	articleId: string,
+	options: { signal?: AbortSignal; cursor?: string } = {},
+): Promise<PublicCommentPage> {
+	const query = new URLSearchParams({ articleId, limit: "50" });
+	if (options.cursor) query.set("cursor", options.cursor);
+	const payload = record(
+		await request(
+			`/api/public/comments?${query}`,
+			{ headers: { Accept: "application/json" } },
+			options.signal,
+		),
+	);
+	if (
+		!Array.isArray(payload.data) ||
+		payload.data.length > 100 ||
+		(payload.nextCursor !== null &&
+			(typeof payload.nextCursor !== "string" ||
+				!/^[A-Za-z0-9_-]{20,240}$/.test(payload.nextCursor)))
+	)
+		throw new Error("公开接口返回了无效评论分页，请稍后重试。");
+	return {
+		data: payload.data.map((value) => readComment(value, articleId)),
+		nextCursor: payload.nextCursor as string | null,
+	};
+}
+
 export async function fetchPublicData<T extends PublicComment | PublicFriend>(
 	resource: Resource,
 	options: { signal?: AbortSignal; articleId?: string } = {},
 ): Promise<T[]> {
-	const query =
-		resource === "comments"
-			? `?articleId=${encodeURIComponent(options.articleId ?? "")}`
-			: "";
+	if (resource === "comments")
+		return (
+			await fetchPublicCommentPage(options.articleId ?? "", {
+				signal: options.signal,
+			})
+		).data as T[];
 	const payload = record(
 		await request(
-			`/api/public/${resource}${query}`,
+			`/api/public/${resource}`,
 			{ headers: { Accept: "application/json" } },
 			options.signal,
 		),
@@ -177,22 +209,18 @@ export async function fetchPublicData<T extends PublicComment | PublicFriend>(
 	if (!Array.isArray(payload.data) || payload.data.length > 10000) {
 		throw new Error("公开接口返回了无效数据，请稍后重试。");
 	}
-	return payload.data.map((value) =>
-		resource === "comments"
-			? readComment(value, options.articleId)
-			: readFriend(value),
-	) as T[];
+	return payload.data.map(readFriend) as T[];
 }
 
 export async function submitPublicInteraction(
 	resource: Resource,
 	payload: Record<string, unknown>,
 	signal?: AbortSignal,
-): Promise<void> {
+): Promise<PublicComment | undefined> {
 	if (typeof payload.turnstileToken !== "string" || !payload.turnstileToken) {
 		throw new Error("请先完成人机验证。");
 	}
-	await request(
+	const response = await request(
 		`/api/public/${resource}`,
 		{
 			method: "POST",
@@ -204,6 +232,9 @@ export async function submitPublicInteraction(
 		},
 		signal,
 	);
+	return resource === "comments"
+		? readComment(record(response).data, String(payload.articleId ?? ""))
+		: undefined;
 }
 
 type TurnstileApi = {
@@ -263,6 +294,7 @@ function loadTurnstile(): Promise<TurnstileApi> {
 export async function mountTurnstile(
 	container: HTMLElement,
 	siteKey: string,
+	action: TurnstileAction,
 	onToken: (token: string, issue?: string) => void,
 	signal: AbortSignal,
 ): Promise<{ reset(): void; remove(): void }> {
@@ -281,6 +313,7 @@ export async function mountTurnstile(
 	};
 	const id = api.render(container, {
 		sitekey: siteKey,
+		action,
 		theme: "auto",
 		callback: (token: string) => updateToken(token),
 		"expired-callback": () => updateToken("", "人机验证已过期，请重新验证。"),

@@ -6,10 +6,11 @@ import { createDatabase, type Database } from "../server/db.js";
 import { createPost, getPost, savePost } from "../server/content.js";
 import { ApiFailure } from "../server/security.js";
 import { GitHubError, type GitHubProvider } from "../server/github.js";
-import { freezeRelease, processReleaseTask, type FrozenSnapshot, type DeploymentProvider } from "../server/releases.js";
+import { freezeRelease, processReleaseTask, reconcileVerifiedReleaseNotifications, type FrozenSnapshot, type DeploymentProvider } from "../server/releases.js";
 import { publicContentDigest, sha256 } from "../server/release-format.js";
 
 const databaseUrl = process.env.ADMIN_TEST_DATABASE_URL;
+type Row = Record<string, unknown>;
 const baseSha = "a".repeat(40);
 const targetSha = "b".repeat(40);
 const source = '---\n# preserve this comment\ntitle: "Frozen"\npublished: 2026-09-10\ndraft: false\nunknown: { untouched: [1, 2] }\n---\n<div>Original HTML</div>\n';
@@ -127,6 +128,35 @@ test("PostgreSQL release tasks preserve snapshots and reconcile concurrent or un
 			await assert.rejects(() => processReleaseTask(release.id, deps), /durable notification/);
 			assert.equal((await getPost(db, site, post.id)).publishedSource, source);
 			assert.deepEqual(await processReleaseTask(release.id, deps), { done: true, state: "verified" }); assert.equal(commits, 1); assert.equal(notifications, 2);
+		});
+		await t.test("a failed build can recheck the existing SHA without issuing another Git commit", async () => {
+			const site = newSite(); const post = await seed(db, site); const release = await freezeRelease(input(post.id), db, site); let commits = 0;
+			const git = github({ async commit() { commits++; return targetSha; } });
+			const failed = { db, site, github: git, deployment: { async verify() { return { status: "failed" as const, deploymentId: "failed-build" }; } }, skipCapabilityCheck: true, afterVerified: noNotification };
+			assert.equal((await processReleaseTask(release.id, failed)).state, "failed"); assert.equal(commits, 1);
+			const recheck = { ...failed, deployment: verified };
+			assert.equal((await processReleaseTask(release.id, recheck)).state, "failed");
+			assert.equal((await processReleaseTask(release.id, { ...recheck, retryFailedDeployment: true })).state, "verified"); assert.equal(commits, 1);
+			assert.equal((await getPost(db, site, post.id)).publishedSource, source);
+		});
+		await t.test("rechecking a failed SHA cannot rewind a baseline advanced by another release", async () => {
+			const site = newSite(); const post = await seed(db, site); const release = await freezeRelease(input(post.id), db, site); let commits = 0;
+			const deps = { db, site, github: github({ async commit() { commits++; return targetSha; } }), deployment: { async verify() { return { status: "failed" as const, deploymentId: "failed-build" }; } }, skipCapabilityCheck: true, afterVerified: noNotification };
+			assert.equal((await processReleaseTask(release.id, deps)).state, "failed");
+			const newer = "c".repeat(40); await db.query("UPDATE entities SET data=data || $2::jsonb WHERE site_id=$1 AND kind='repository'", [site, JSON.stringify({ headSha: newer })]);
+			assert.equal((await processReleaseTask(release.id, { ...deps, deployment: verified, retryFailedDeployment: true })).state, "conflict"); assert.equal(commits, 1);
+			const [baseline] = await db.query<Row>("SELECT data FROM entities WHERE site_id=$1 AND kind='repository'", [site]);
+			assert.equal((baseline.data as Record<string, unknown>).headSha, newer); assert.equal((await getPost(db, site, post.id)).publishedSource, null);
+		});
+		await t.test("durable verified notification pending is repaired independently of a stopped Workflow", async () => {
+			const site = newSite(); const post = await seed(db, site); const release = await freezeRelease(input(post.id), db, site); let commits = 0;
+			await assert.rejects(() => processReleaseTask(release.id, { db, site, github: github({ async commit() { commits++; return targetSha; } }), deployment: verified, skipCapabilityCheck: true, afterVerified: async () => { throw new Error("worker stopped after verification"); } }), /durable notification/);
+			const [pending] = await db.query<Row>("SELECT state,details FROM release_tasks WHERE site_id=$1 AND id=$2", [site, release.id]);
+			assert.equal(pending.state, "verified"); assert.equal((pending.details as Record<string, unknown>).notificationState, "pending");
+			await reconcileVerifiedReleaseNotifications(db, site);
+			const [completed] = await db.query<Row>("SELECT details FROM release_tasks WHERE site_id=$1 AND id=$2", [site, release.id]);
+			assert.equal((completed.details as Record<string, unknown>).notificationState, "done");
+			await reconcileVerifiedReleaseNotifications(db, site); assert.equal(commits, 1);
 		});
 	} finally {
 		for (const site of sites) for (const table of ["entities", "friends", "release_tasks", "release_snapshots", "release_locks"]) await db.query(`DELETE FROM ${table} WHERE site_id=$1`, [site]);

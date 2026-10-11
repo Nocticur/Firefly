@@ -12,6 +12,7 @@ const siteKey = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY ?? "";
     {articleId ? "正在加载评论…" : "此页面尚未关联已发布的文章，暂未开放评论。"}
   </p>
   <ol data-comments-list class="nocticur-comment-list"></ol>
+  <button type="button" data-load-more-comments hidden>加载更多评论</button>
   <form data-comment-form class="nocticur-comment-form" hidden={!articleId}>
     <div data-reply-panel class="nocticur-reply-panel" hidden>
       <span data-reply-label></span>

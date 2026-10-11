@@ -1,5 +1,6 @@
 import { getCollection } from "astro:content";
 import { createMarkdownProcessor } from "@astrojs/markdown-remark";
+import { isOriginalDynamicExample } from "@/utils/dynamic-example";
 import {
 	dynamicSearchText,
 	dynamicSlug,
@@ -25,6 +26,7 @@ export async function GET(): Promise<Response> {
 
 			return {
 				id: dynamicSlug(entry.id),
+				example: isOriginalDynamicExample(entry.filePath),
 				published: entry.data.published.getTime(),
 				html: rendered.code,
 				images,

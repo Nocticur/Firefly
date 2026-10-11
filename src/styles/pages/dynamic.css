@@ -4,6 +4,17 @@ dynamic-feed {
 	display: block;
 }
 
+[data-dynamic-example-avatar][hidden],
+[data-dynamic-avatar][hidden],
+[data-dynamic-example-label][hidden] {
+	display: none;
+}
+
+[data-dynamic-example-label] {
+	color: var(--content-meta);
+	font-size: 0.75rem;
+}
+
 .page-filter {
 	grid-column: 1 / -1;
 	display: flex;

@@ -1,12 +1,14 @@
 # Nocticur 的 Firefly 博客与管理后台
 
+配置时先查阅 [环境变量填写清单](./environment-variables.md)，区分博客构建变量与后台服务凭据。安全复审及其验证边界见 [安全复审报告](./security-review.md)。
+
 本次选择 `Nocticur/Firefly` 与 Vercel 方案，发布分支为 `master`。博客保持 Astro 静态站点；管理界面、Hono API 与 Workflow 在独立 Vercel 项目运行。生产目标地址为 `https://blog.mourn.top/` 和 `https://admin.mourn.top/`。
 
 本地验收已完成；Git 提交与推送状态以当前 Git 记录及本次推送回执为准。验证记录见 [acceptance.md](./acceptance.md)，平台配置与上线步骤见 [deployment.md](./deployment.md)。实际生产服务尚未接入，生产域名尚未切换。
 
 本地完整数据库测试、发布清单测试、类型检查、博客与后台构建、编译后 API、主要页面和编辑器 8 项实际交互均已通过，详见验收记录。
 
-交付文件为 [源码与验收包](/workspace/firefly-nocticur-review.tar.gz) 和 [SHA256 校验文件](/workspace/firefly-nocticur-review.tar.gz.sha256)。包为此前本地验收快照，本次推送准备仅调整本文件、`acceptance.md` 和 `resume-plan.md` 的状态措辞。包内包含完整工作区源码、`worktree.patch`、`deleted-paths.txt`、明确选取的环境辅助文件、验收日志、JSON 和截图；不包含会话文件、实际 `.env`、缓存或数据库。`deleted-paths.txt` 记录停用的旧 GitHub Pages workflow，恢复原代码仍使用前置备份。
+初次迁移交付文件为 [源码与验收包](/workspace/firefly-nocticur-review.tar.gz) 和 [SHA256 校验文件](/workspace/firefly-nocticur-review.tar.gz.sha256)，不包含后续安全修复；最新源码以当前 Git 记录为准。安全复审补丁、最终证据和新增截图见 [firefly-security-review.tar.gz](/workspace/firefly-security-review.tar.gz)。交付不包含会话、实际 `.env`、缓存或数据库。旧包的 `deleted-paths.txt` 记录停用的 GitHub Pages workflow，恢复原代码仍使用前置备份。
 
 ## 改动清单
 

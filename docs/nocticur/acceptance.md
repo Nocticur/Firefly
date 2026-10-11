@@ -2,6 +2,8 @@
 
 选择 `Nocticur/Firefly`、发布分支 `master`；时间口径为 `Asia/Shanghai`。此表分别记录本地执行结果、测试替身覆盖及真实平台未执行项，不能将本地测试通过视为已上线。
 
+2026-10-11 安全复审后的最终回归已完成，以下数字对应更新后的源码和锁文件。修复及剩余边界见 [security-review.md](./security-review.md)；变量的来源见 [environment-variables.md](./environment-variables.md)。
+
 ## 当前执行结果
 
 | 检查 | 状态 | 证据与范围 |
@@ -9,16 +11,19 @@
 | 前置代码备份 | 已执行 | `/workspace/backups/firefly-before-nocticur/` 的 Git bundle 与 tracked tar，已完成校验；原 HEAD 为 `6d82554bfe1cb3d4b43adb0969dad1d43ac6dee3` |
 | 只读来源与原图 | 已执行 | 来源提交 `c075ac36c1313dc6ee47f7690c1a360aaa087da8`；原图 SHA256 为 `3a7ed7bac3634bb05876966b415600c9f3862be08e1df09b10142cb0c622b01f`，见迁移 provenance |
 | 内容迁移与基线 | 已执行 | 基线与 provenance 保存原 14 条、迁入两篇及正文哈希；本地管理导入 16 条、公开映射 15 篇，原草稿继续私有 |
-| `pnpm check` | 已执行，通过 | [blog-check-final.log](/workspace/.firefly-environment/blog-check-final.log)：271 文件，0 errors、0 warnings、0 hints |
-| 后台完整测试 | 已执行，通过 | [admin-tests-final.log](/workspace/.firefly-environment/admin-tests-final.log)：124 通过、0 失败、0 跳过；使用隔离真实 PostgreSQL，GitHub / Vercel / Blob / Resend / Turnstile 为受控替身 |
+| `pnpm check` | 已执行，通过 | [blog-check-final.log](/workspace/.firefly-environment/blog-check-final.log)：272 文件，0 errors、0 warnings、0 hints |
+| 后台完整测试 | 已执行，通过 | [admin-tests-final.log](/workspace/.firefly-environment/admin-tests-final.log)：161 通过、0 失败、0 跳过；使用隔离真实 PostgreSQL，GitHub / Vercel / Blob / Resend / Turnstile 为受控替身 |
 | 发布清单测试 | 已执行，通过 | [manifest-tests-final.log](/workspace/.firefly-environment/manifest-tests-final.log)：13 通过、0 失败、0 跳过；验证文章映射、草稿隔离、内容摘要、实际构建产物和永久重定向 |
 | 根与后台最终类型检查 | 已执行，通过 | [blog-typecheck-final.log](/workspace/.firefly-environment/blog-typecheck-final.log) 与 [admin-typecheck-final.log](/workspace/.firefly-environment/admin-typecheck-final.log)：根 `pnpm type-check` 与后台 `type-check` 均成功 |
 | 完整博客 `pnpm build` | 已执行，通过 | [blog-build-final.log](/workspace/.firefly-environment/blog-build-final.log)：42 个生成路由、15 篇公开文章、33 个 Pagefind 文件；保留资源后处理、字体处理及最终清单 |
-| Nitro Vercel 构建 | 已执行，通过 | [admin-vercel-build-final.log](/workspace/.firefly-environment/admin-vercel-build-final.log)：`NITRO_PRESET=vercel pnpm --filter @nocticur/admin build` 成功；生成 Node 函数及 20 steps / 3 workflows，包含 Workflow 入口 |
+| Nitro Vercel 构建 | 已执行，通过 | [admin-build-final.log](/workspace/.firefly-environment/admin-build-final.log)：`NITRO_PRESET=vercel pnpm --filter @nocticur/admin build` 成功；生成 Node 函数及 20 steps / 3 workflows，包含 Workflow 入口 |
 | 编译后管理函数 | 已执行，通过 | [compiled-admin-acceptance.json](/workspace/.firefly-environment/compiled-admin-acceptance.json)：5 项通过；本地调用实际 Vercel Node 产物，核对真实 PostgreSQL 的 16/15 基线、匿名拒绝、OpenAPI、API no-store 和 SPA / CSP 回退 |
 | 浏览器与移动端 | 已执行，通过 | [browser-acceptance.json](/workspace/.firefly-environment/browser-acceptance.json)：9 个管理页面、16 条管理记录、两篇中文 slug；管理与博客手机布局通过，无页面运行错误；截图位于 `screenshots/` |
 | 编辑器实际交互 | 已执行，通过 | [browser-editor.json](/workspace/.firefly-environment/browser-editor.json)：8 项通过，涵盖源码字节往返、浮动菜单、Mermaid、双语斜杠菜单与代码语言搜索、Ctrl+K、实际 Markdown 剪贴板粘贴、行内/块 LaTeX 编辑与往返、高级表格行列增删、合并/拆分及多段落往返；无页面运行错误、无 API 写请求，未知 YAML 保留、原文章文件未改、没有保存试验编辑 |
 | 订阅与搜索 | 已执行，通过 | [smoke-migration.log](/workspace/.firefly-environment/smoke-migration.log)：生产预览 12 项通过，无页面运行错误；RSS / Atom 各 15 项，Pagefind 实际搜索与搜索输入可用，目录、OG 图与重复文章请求正常 |
+| 迁移字节复核 | 已执行，通过 | [migration-integrity-audit.json](/workspace/.firefly-environment/migration-integrity-audit.json)：原 14 条文件哈希完整一致；两篇仅增加 slug；头像与四条模板动态保持原字节 |
+| 安全浏览器验证 | 已执行，通过 | [browser-security-review.json](/workspace/.firefly-environment/browser-security-review.json)：6 项通过，覆盖模板署名、旧收款入口、基线核对、待审核头像零跟踪请求、评论默认关闭与匿名基线读取拒绝 |
+| npm 依赖漏洞审计 | 已执行，通过 | [dependency-audit.json](/workspace/.firefly-environment/dependency-audit.json)：1829 依赖，0 critical/high/moderate/low/info；修复前 59 项记录保存在 `dependency-audit-before.json`；没有忽略公告 |
 | 外部服务与生产切换 | 未执行 | 未配置实际 OAuth/App、Neon、Blob、Turnstile、Resend 与 Vercel 生产服务；未切换域名 |
 
 当前证据目录为 `/workspace/.firefly-environment/`，其中日志、JSON 和截图不会自动随 Git 保存或进入新云实例；会话文件不用于交付。最终结果与新增验证由实际运行者更新，未记录结果仍视为未完成。
@@ -27,7 +32,7 @@
 
 本地验收已完成，Git 提交与推送状态以当前 Git 记录及本次推送回执为准。本地发布清单的 Git SHA 取自构建时的 checkout；它不是新代码已经部署的证据。生产验收须从已提交的目标 SHA 完整构建，再核对实际生产清单和别名。
 
-源码与本地验收交付见 [firefly-nocticur-review.tar.gz](/workspace/firefly-nocticur-review.tar.gz) 及 [SHA256 校验文件](/workspace/firefly-nocticur-review.tar.gz.sha256)。包为此前本地验收快照，本次推送准备仅调整 `README.md`、本文件和 `resume-plan.md` 的状态措辞。源码、完整工作区补丁与删除路径清单可用于审阅和恢复本次改动；实际会话、`.env`、缓存和数据库不在包内。
+首次迁移源码与验收交付见 [firefly-nocticur-review.tar.gz](/workspace/firefly-nocticur-review.tar.gz) 及 [SHA256 校验文件](/workspace/firefly-nocticur-review.tar.gz.sha256)。这是初次迁移快照，不包含后续安全复审修复；最新源码以当前 Git 记录为准。安全复审补丁、最终证据与两张新增截图另存 [firefly-security-review.tar.gz](/workspace/firefly-security-review.tar.gz)。实际会话、`.env`、缓存和数据库不在交付包内。
 
 ## 已覆盖的故障与数据边界
 

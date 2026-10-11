@@ -4,8 +4,12 @@ const security = [{ session: [], csrf: [] }];
 const paths: Record<string, Record<string, Operation>> = {};
 function route(method: string, path: string, tag: string, summary: string, publicAccess = false, fields?: Record<string, unknown>, required: string[] = []) {
 	const operation: Operation = { tags: [tag], summary, security: publicAccess ? [] : method === "get" ? [{ session: [] }] : security, responses: { "200": jsonResponse, "201": jsonResponse, "202": jsonResponse, "400": jsonResponse, "401": jsonResponse, "403": jsonResponse, "409": jsonResponse, "503": jsonResponse } };
-	const parameters = [...path.matchAll(/\{([^}]+)\}/g)].map((match) => ({ name: match[1], in: "path", required: true, schema: { type: "string" } }));
-	if (path === "/api/public/comments" && method === "get") parameters.push({ name: "articleId", in: "query", required: true, schema: { type: "string" } });
+	const parameters: Record<string, unknown>[] = [...path.matchAll(/\{([^}]+)\}/g)].map((match) => ({ name: match[1], in: "path", required: true, schema: { type: "string" } }));
+		if (path === "/api/public/comments" && method === "get") {
+			parameters.push({ name: "articleId", in: "query", required: true, schema: { type: "string" } });
+			parameters.push({ name: "cursor", in: "query", required: false, schema: { type: "string" } });
+			parameters.push({ name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 100, default: 50 } });
+		}
 	if (parameters.length) operation.parameters = parameters;
 	if (fields) operation.requestBody = { required: true, content: { "application/json": { schema: { type: "object", properties: fields, required, additionalProperties: true } } } };
 	(paths[path] ||= {})[method] = operation;

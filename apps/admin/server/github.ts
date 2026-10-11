@@ -6,7 +6,7 @@ export class GitHubError extends Error {
 	constructor(public status: number, message: string, public uncertain = false, public conflict = false) { super(message); }
 }
 export type GitHubProvider = {
-	readRepositoryFiles(): Promise<{ headSha: string; files: RepositoryFile[]; publishedState?: unknown }>;
+	readRepositoryFiles(sha?: string): Promise<{ headSha: string; files: RepositoryFile[]; publishedState?: unknown }>;
 	commit(input: { baseSha: string; taskId: string; digest: string; files: RepositoryFile[]; deletions: string[] }): Promise<string>;
 	findCommit(taskId: string, digest: string): Promise<string | null>;
 };
@@ -79,8 +79,9 @@ export async function branchHead(): Promise<string> {
 	if (!validSha(ref?.object?.sha)) throw new GitHubError(502, "GitHub returned an invalid branch head");
 	return ref.object.sha;
 }
-export async function readRepositoryFiles(): Promise<{ headSha: string; files: RepositoryFile[]; publishedState?: unknown }> {
-	const headSha = await branchHead();
+export async function readRepositoryFiles(sha?: string): Promise<{ headSha: string; files: RepositoryFile[]; publishedState?: unknown }> {
+	if (sha !== undefined && !validSha(sha)) throw new GitHubError(400, "Invalid immutable repository revision");
+	const headSha = sha || await branchHead();
 	const tree = await request<{ truncated: boolean; tree: Array<{ path: string; type: string; sha: string }> }>(`${repo}/git/trees/${headSha}?recursive=1`);
 	if (tree.truncated) throw new Error("Repository tree is truncated; baseline cannot be imported safely");
 	const files: RepositoryFile[] = [];

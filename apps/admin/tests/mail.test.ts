@@ -63,6 +63,23 @@ test("webhook HTTP route fails closed in development even with provider-shaped r
 	} finally { if (previous === undefined) delete process.env.APP_ENV; else process.env.APP_ENV = previous; }
 });
 
+test("webhook HTTP route bounds a streamed body before provider or database configuration", async () => {
+	const app = new Hono<AppEnv>(); registerMailRoutes(app);
+	app.onError((error, c) => error instanceof ApiFailure ? c.json({ error: error.code }, error.status as 413) : c.json({ error: "unexpected" }, 500));
+	let canceled = false;
+	const stream = new ReadableStream<Uint8Array>({
+		pull(controller) { controller.enqueue(new Uint8Array(70 * 1024)); },
+		cancel() { canceled = true; },
+	});
+	const request = new Request("http://localhost/api/webhooks/resend", {
+		method: "POST", headers: { "svix-id": "msg_audit", "svix-timestamp": String(Math.floor(Date.now() / 1000)), "svix-signature": "v1,not-a-real-signature" },
+		body: stream, duplex: "half",
+	} as RequestInit);
+	const response = await app.fetch(request);
+	assert.equal(response.status, 413); assert.deepEqual(await response.json(), { error: "REQUEST_TOO_LARGE" });
+	assert.equal(canceled, true);
+});
+
 test("PostgreSQL durable mail claims, unknown outcomes, and signed provider evidence", { skip: !databaseUrl }, async (t) => {
 	const db = createDatabase(databaseUrl!); const sites: string[] = [];
 	const newSite = () => { const site = `tests/mail-${randomUUID()}:production`; sites.push(site); return site; };
@@ -146,6 +163,25 @@ test("PostgreSQL durable mail claims, unknown outcomes, and signed provider evid
 			for (const mismatch of [{ tags: { notification_id: randomUUID() } }, { to: ["other@example.invalid"] }, { subject: "Other subject" }, { tags: [{ name: "notification_id", value: id }, { name: "notification_id", value: id }] }]) { await callback(deps, "email.sent", id, mismatch); assert.equal((await read(site, id)).status, "pending"); }
 			await callback(deps, "email.sent", id, { tags: [{ name: "notification_id", value: id }] }); assert.equal((await read(site, id)).status, "sent");
 			await callback(deps, "email.bounced", id, { email_id: "other-provider-id" }); assert.equal((await read(site, id)).status, "sent"); assert.equal((await read(site, id)).provider_id, "provider-verified");
+		});
+		await t.test("HTTP webhook preserves signed raw Unicode bytes and rejects stale or future signatures", async () => {
+			const repository = `tests/mail-${randomUUID()}`; const site = `${repository}:production`; sites.push(site);
+			const id = await seed(site); const event = signed("email.sent", id);
+			const payload = `${JSON.stringify({ ...JSON.parse(event.payload), note: "原始字节：邮箱回复" }, null, 2)}\n`;
+			const names = ["APP_ENV", "VERCEL_ENV", "ENABLE_PRODUCTION_EMAIL", "RESEND_API_KEY", "RESEND_FROM", "RESEND_WEBHOOK_SECRET", "ADMIN_PRODUCTION_DATABASE_URL", "GITHUB_REPOSITORY"] as const;
+			const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+			Object.assign(process.env, { APP_ENV: "production", VERCEL_ENV: "production", ENABLE_PRODUCTION_EMAIL: "true", RESEND_API_KEY: "re_test_not_a_real_credential", RESEND_FROM: "sender@example.invalid", RESEND_WEBHOOK_SECRET: webhookSecret, ADMIN_PRODUCTION_DATABASE_URL: databaseUrl!, GITHUB_REPOSITORY: repository });
+			try {
+				const app = new Hono<AppEnv>(); registerMailRoutes(app);
+				app.onError((error, c) => error instanceof ApiFailure ? c.json({ error: error.code }, error.status as 403) : c.json({ error: "unexpected" }, 500));
+				for (const offset of [-600, 600, 0]) {
+					const timestamp = String(Math.floor(Date.now() / 1000) + offset);
+					const signature = `v1,${createHmac("sha256", secretBytes).update(`${event.headers.id}.${timestamp}.${payload}`).digest("base64")}`;
+					const response = await app.request("http://localhost/api/webhooks/resend", { method: "POST", headers: { "svix-id": event.headers.id, "svix-timestamp": timestamp, "svix-signature": signature }, body: payload });
+					assert.equal(response.status, offset ? 403 : 200);
+					assert.equal((await read(site, id)).status, offset ? "pending" : "sent");
+				}
+			} finally { for (const name of names) if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; }
 		});
 		await t.test("inbound, scheduled, and delayed events cannot confirm sending; real outbound failures persist", async () => {
 			for (const type of ["email.received", "email.scheduled", "email.delivery_delayed", "contact.created"]) {

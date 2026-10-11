@@ -26,6 +26,8 @@
 
 ## 环境隔离与变量
 
+变量的填写来源、所属项目和必填条件见 [环境变量填写清单](./environment-variables.md)。
+
 [apps/admin/.env.example](../../apps/admin/.env.example) 只提供变量名及已知公开身份，秘密值为空。开发时可复制为被忽略的 `apps/admin/.env` 并由受支持的环境加载方式注入；迁移与 `tsx` 测试应使用已注入的进程环境，不能假定它们自动读取 `.env`。
 
 `APP_ENV` 在每个环境显式设为 `production`、`preview` 或 `development`，必须与 Vercel 自行提供的 `VERCEL_ENV` 一致。部署平台的 `VERCEL`、`VERCEL_ENV` 与 `VERCEL_GIT_COMMIT_SHA` 保持平台提供值。生产写能力要求两个环境标识同时为 production，并显式打开对应开关；仅在平台 Production 范围配置开关与生产秘密。
@@ -48,13 +50,14 @@
 | `VERCEL_AUTOMATION_BYPASS_SECRET` | 若博客部署保护阻挡清单请求，使用专门的自动化绕过秘密 |
 | `MEDIA_IMPORT_HOSTS` | 外链导入精确 HTTPS 主机白名单，逗号分隔；空值关闭外链导入 |
 | `TURNSTILE_SECRET_KEY` / `INTERACTION_HASH_SECRET` | 当前环境的人机验证与访客标识摘要密钥；建议分别生成，摘要密钥变更会影响既有访客封禁标识 |
+| `ENABLE_PUBLIC_COMMENTS` | 默认关闭公开评论 API；仅与前台 `commentConfig.type=nocticur` 一同显式设为 `true` |
 | `RESEND_API_KEY` / `RESEND_FROM` / `RESEND_WEBHOOK_SECRET` | Production 正式发信、已验证发件人及签名回调 |
 | `CRON_SECRET` | 管理 Production 的每日维护鉴权密钥 |
 | `ENABLE_PRODUCTION_PUBLISH` / `ENABLE_PRODUCTION_EMAIL` / `ENABLE_PRODUCTION_MAINTENANCE` | 空值关闭；只在 Production 按受控验收与正式运行需求设置为 `true` |
 
 博客项目另设公开构建变量 `PUBLIC_TURNSTILE_SITE_KEY`，为当前前台对应站点的 Turnstile 公钥。它可进入公开静态产物；`TURNSTILE_SECRET_KEY` 只在管理项目。注册允许 `blog.mourn.top` 的小组件，隔离环境使用各自的小组件与密钥。缺少公钥时页面保留评论和申请结构，明确显示暂不能提交。
 
-评论引擎保留原来的关闭状态：`src/config/commentConfig.ts` 的 `type` 当前为 `none`。准备验收本站评论时，显式选择 `nocticur` 并完整构建，同时检查具体文章的评论开关；仅填写 Turnstile 变量不会启用评论引擎。友链申请使用同一套公开互动校验，不依赖评论引擎开关。
+评论引擎保留原来的关闭状态：`src/config/commentConfig.ts` 的 `type` 当前为 `none`。准备验收本站评论时，显式选择 `nocticur` 并完整构建，同时将后台 `ENABLE_PUBLIC_COMMENTS` 设为 `true`，检查具体文章的评论开关。仅填写 Turnstile 变量不会启用评论。友链申请不依赖评论开关；后台核验小组件 action（`comments` / `friend_request`）及 hostname。公开评论采用有界游标分页。
 
 当前根 `vercel.json` 的转发目标固定为生产管理域名。临时博客 Preview 的写入来源会被生产 API 拒绝，**不能将这种 Preview 宣称为可写隔离联调环境**。需要互动联调时，先为隔离部署配置指向隔离管理项目的转发与精确 origins；否则 Preview 仅用于静态内容检查，并保持互动提交关闭。OAuth 同样只接受 `https://admin.mourn.top`，临时 Preview 管理域名不能进行生产登录；不要复制生产 Cookie 或会话数据库到 Preview。
 
@@ -90,6 +93,8 @@ https://admin.mourn.top/api/auth/callback
 
 代码首次推送到目标 `master` 后，登录管理后台执行一次“导入仓库基线”；核对 16 条管理记录、15 篇公开文章、草稿状态与真实设置。导入不触发发布，并且第二次导入不会覆盖已有草稿。此步骤需要 GitHub App 能读到新加入的 `src/data` 基线文件，不能针对改动尚未推送的旧远端验证迁移结果。
 
+外部代码升级后，可在发布页点击“核对代码更新”。只有基线与远端的管理文件字节完全相同时才推进代码基线，保留私有草稿与历史；管理内容变化时显示逐文件差异并拒绝同步，需独立审阅合并，不强推或自动覆盖。失败部署若已有目标 SHA，可以在原任务中显式核查同 SHA 的重部署，仍需完整生产核验，不再次提交 Git。
+
 基线同时读取根 `vercel.json`。改 slug 后显式发布会将旧址映射写入 `src/data/redirects.json`，并在同一原子提交中更新根 Vercel `redirects` 为对应的 `permanent: true` 规则，保留其他配置、原安全 headers 和非管理重定向。冻结快照缺少部署配置、已有相同旧址规则冲突或映射不一致时拒绝发布；最终构建也会核对两份映射。上线验收仍须请求真实旧址，确认平台返回永久跳转且目标页面正确。
 
 管理的精确旧址规则排在保留的其他规则之前，避免被宽泛匹配遮住。新公开文章若占用仍用于旧址跳转的路径，发布返回冲突，不能把已有文章入口改为跳转入口。
@@ -110,6 +115,8 @@ Marketplace 自动注入的单个 `BLOB_READ_WRITE_TOKEN` 不能替代这两种�
 
 私有资源仅经鉴权内容接口读取，不写临时 URL 到公开文章。显式发布读取快照中冻结的资源路径、版本、类型、大小与摘要，校验实际字节，再复制为公开不可变版本；重试也会核验已存在的公开对象。发布过程中修改或删除当前媒体记录不改变冻结版本，历史资源仍须保留。外链导入限定精确 HTTPS 主机、公网解析地址与直接图片响应，不接受重定向；先按实际来源填写 `MEDIA_IMPORT_HOSTS`，不预设通配符。
 
+外链导入有覆盖 DNS、连接和下载的 30 秒总期限。当前图片检查核验格式签名、类型、大小与摘要，不是完整解码或像素上限检查；管理员应使用可信原图。
+
 ## Resend、Webhook 与每日维护
 
 在 Resend 验证发件域与发件人，再配置 `RESEND_FROM` 和 API key。Webhook 地址为：
@@ -119,6 +126,8 @@ https://admin.mourn.top/api/webhooks/resend
 ```
 
 复制该 Webhook 的签名秘密至 `RESEND_WEBHOOK_SECRET`，确认部署保护允许签名回调到达。审核拒绝与邮件入队在同一个 PostgreSQL 事务完成，并在事务提交后调度发送；通过审核的友链先参加显式发布，仅当生产清单核验成功后入队上线通知。上线通知收件人取自被冻结的私有快照，不写入 Git 或公开清单。通知使用唯一键、发送记录与 Resend 幂等键；调度失败保留持久待发记录，重复触发使用同一通知 ID。
+
+发布成功事务保存通知待办，每日维护与原任务核查补齐 Workflow 中断后遗漏的唯一通知；备份失败不阻止本次补齐尝试。恢复保留服务商已确认的发送及退信/投诉/失败事实，不恢复成待发送状态。
 
 邮件“已发送”表示服务商已接受或已确认发送，不保证收件箱送达。签名回调中的退信、投诉、失败或抑制会落为失败并记录原因；入站、计划发送或延迟事件不作为发送成功证据。发送响应丢失、函数中断或结果未知时先查签名回调和服务商记录。超过 24 小时幂等窗口会阻止自动重发；`POST /api/mail/{id}/reconcile` 可附已核实的 `providerId` 只读核查服务商证据，不能把查询不到记录当作未发送证明。
 

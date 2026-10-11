@@ -15,7 +15,7 @@
 
 ## 交付与后续任务
 
-交付包为 [firefly-nocticur-review.tar.gz](/workspace/firefly-nocticur-review.tar.gz)，校验文件为 [SHA256](/workspace/firefly-nocticur-review.tar.gz.sha256)。包为此前本地验收快照，本次推送准备仅调整 `README.md`、`acceptance.md` 和本文件的状态措辞。归档范围为已验收源码、完整工作区补丁、删除路径清单、明确选取的环境辅助文件、日志和截图；排除 `.env`、会话文件、缓存、数据库和秘密，保留前置备份。
+交付包为 [firefly-nocticur-review.tar.gz](/workspace/firefly-nocticur-review.tar.gz)，校验文件为 [SHA256](/workspace/firefly-nocticur-review.tar.gz.sha256)。该包是初次迁移快照，不包含后续安全修复；最新源码以当前 Git 为准。安全复审证据另存 `/workspace/firefly-security-review.tar.gz`，参见 `security-review.md` 和 `environment-variables.md`。归档范围为已验收源码、完整工作区补丁、删除路径清单、明确选取的环境辅助文件、日志和截图；排除 `.env`、会话文件、缓存、数据库和秘密，保留前置备份。
 
 本地验收已完成；用户已要求推送到 `Nocticur/Firefly`，Git 提交与推送状态以当前 Git 记录及本次推送回执为准。剩余工作是外部配置与线上验收：依据 `deployment.md` 在安全平台设置中配置 Vercel、Neon、Blob、GitHub OAuth/App、Turnstile 和 Resend，并核对项目和域名后执行生产切换。当前没有这些真实服务凭据，实际生产服务尚未接入，正式域名尚未上线，未验证真实邮件或线上永久跳转。最新云环境说明需从当前已发布设置的新 setup 会话合并保存，不能重试旧 `stale_base` 绑定。
 
@@ -23,4 +23,4 @@
 
 继续使用 `/workspace/Firefly` 的现有 checkout，不新建 worktree。每个 pnpm shell 先 `source /workspace/.firefly-environment/activate.sh`。隔离本地数据库为 `postgres://nocticur@127.0.0.1:5433/nocticur_admin`；服务进程不保证跨暂停或新实例存活，按 `start-implementation.md` 检查和重启。
 
-主要日志：`/workspace/.firefly-environment/admin-tests-final.log`、`manifest-tests-final.log`、`blog-check-final.log`、`blog-typecheck-final.log`、`admin-typecheck-final.log`、`blog-build-final.log`、`admin-vercel-build-final.log`。浏览器会话文件仅用于本地验证，不输出、不打包。
+主要日志：`/workspace/.firefly-environment/admin-tests-final.log`、`manifest-tests-final.log`、`blog-check-final.log`、`blog-typecheck-final.log`、`admin-typecheck-final.log`、`blog-build-final.log`、`admin-build-final.log`。浏览器会话文件仅用于本地验证，不输出、不打包。

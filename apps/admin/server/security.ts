@@ -39,12 +39,61 @@ export function managementOrigin(): string {
 	if (parsed.origin !== origin || (environment === "preview" && parsed.protocol !== "https:") || (environment === "development" && !["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname))) throw new ApiFailure(503, "CONFIGURATION_REQUIRED", "管理域名配置不合法");
 	return origin;
 }
+/** Count incoming bytes before copying them; Content-Length is only an early rejection hint. */
+export async function readText(request: Request, limit: number, timeoutMs = 10_000): Promise<string> {
+	if (!Number.isSafeInteger(limit) || limit < 0 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new TypeError("Invalid request body limits");
+	const lengthHeader = request.headers.get("content-length");
+	let declared: number | undefined;
+	if (lengthHeader !== null) {
+		if (!/^\d+$/.test(lengthHeader) || !Number.isSafeInteger(Number(lengthHeader))) throw new ApiFailure(400, "CONTENT_LENGTH_INVALID", "请求长度不合法");
+		declared = Number(lengthHeader);
+		if (declared > limit) {
+			void request.body?.cancel().catch(() => {});
+			throw new ApiFailure(413, "REQUEST_TOO_LARGE", "请求过大");
+		}
+	}
+	if (!request.body) {
+		if (declared) throw new ApiFailure(400, "CONTENT_LENGTH_INVALID", "请求长度与实际内容不一致");
+		return "";
+	}
+	const reader = request.body.getReader();
+	let bytes = new Uint8Array(Math.min(limit, 16 * 1024));
+	let size = 0;
+	const deadline = Date.now() + timeoutMs;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ApiFailure(408, "REQUEST_TIMEOUT", "读取请求超时")), timeoutMs); });
+	try {
+		while (true) {
+			// Also bound immediately-resolving and empty chunks, which can starve timers.
+			if (Date.now() >= deadline) throw new ApiFailure(408, "REQUEST_TIMEOUT", "读取请求超时");
+			const { done, value } = await Promise.race([reader.read(), timeout]);
+			if (done) break;
+			if (!(value instanceof Uint8Array)) throw new ApiFailure(400, "REQUEST_BODY_INVALID", "请求内容不合法");
+			const nextSize = size + value.byteLength;
+			if (nextSize > limit) throw new ApiFailure(413, "REQUEST_TOO_LARGE", "请求过大");
+			if (nextSize > bytes.length) {
+				const grown = new Uint8Array(Math.min(limit, Math.max(nextSize, bytes.length * 2)));
+				grown.set(bytes.subarray(0, size));
+				bytes = grown;
+			}
+			bytes.set(value, size);
+			size = nextSize;
+		}
+		if (declared !== undefined && size !== declared) throw new ApiFailure(400, "CONTENT_LENGTH_INVALID", "请求长度与实际内容不一致");
+		return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, size));
+	} catch (error) {
+		// Do not await cancellation: a stalled sender must not hold this request open.
+		void reader.cancel().catch(() => {});
+		if (error instanceof ApiFailure) throw error;
+		throw new ApiFailure(400, "REQUEST_BODY_INVALID", "请求内容无法读取");
+	} finally {
+		clearTimeout(timer);
+		reader.releaseLock();
+	}
+}
 export async function readJson(request: Request, limit = 2 * 1024 * 1024): Promise<Record<string, unknown>> {
-	if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new ApiFailure(415, "JSON_REQUIRED", "请求必须使用 application/json");
-	const declared = Number(request.headers.get("content-length") || 0);
-	if (declared > limit) throw new ApiFailure(413, "REQUEST_TOO_LARGE", "请求过大");
-	const text = await request.text();
-	if (Buffer.byteLength(text, "utf8") > limit) throw new ApiFailure(413, "REQUEST_TOO_LARGE", "请求过大");
+	if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get("content-type") || "")) throw new ApiFailure(415, "JSON_REQUIRED", "请求必须使用 application/json");
+	const text = await readText(request, limit);
 	let value: unknown;
 	try { value = JSON.parse(text); } catch { throw new ApiFailure(400, "INVALID_JSON", "JSON 格式不合法"); }
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiFailure(400, "INVALID_BODY", "请求体必须为对象");

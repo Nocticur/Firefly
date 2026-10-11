@@ -25,6 +25,7 @@ test("real PostgreSQL persists public interactions and enforces authenticated mo
 	process.env.PUBLIC_DEV_ORIGIN = publicOrigin;
 	process.env.TURNSTILE_SECRET_KEY = "isolated-test-secret";
 	process.env.INTERACTION_HASH_SECRET = "stable-isolated-test-visitor-secret";
+	process.env.ENABLE_PUBLIC_COMMENTS = "true";
 	process.env.GITHUB_REPOSITORY = `tests/interactions-${randomUUID()}`;
 	const db = getDatabase(); const site = getSiteId();
 	for (const name of ["001-core.sql", "002-release.sql", "003-interactions.sql"]) await db.query(await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
@@ -41,7 +42,7 @@ test("real PostgreSQL persists public interactions and enforces authenticated mo
 		validations++; assert.equal(input, "https://challenges.cloudflare.com/turnstile/v0/siteverify"); assert.equal(init?.redirect, "error");
 		const form = new URLSearchParams(String(init?.body)); assert.equal(form.get("secret"), "isolated-test-secret"); assert.ok(form.get("response")); assert.ok(form.get("remoteip"));
 		if (failNetwork) throw new Error("isolated unavailable provider");
-		return new Response(JSON.stringify(turnstileResult), { headers: { "Content-Type": "application/json" } });
+		return new Response(JSON.stringify({ action: form.get("response") === "verified-friend-request" ? "friend_request" : "comments", ...turnstileResult }), { headers: { "Content-Type": "application/json" } });
 	};
 	function makeApp(database = db): Hono<AppEnv> {
 		const app = new Hono<AppEnv>(); app.onError((error, c) => error instanceof ApiFailure ? error.getResponse() : c.json({ error: { code: "INTERNAL_TEST_FAILURE", message: error.message } }, 500)); registerInteractionRoutes(app, { db: database, site, fetcher, dispatchMail }); return app;
@@ -53,7 +54,7 @@ test("real PostgreSQL persists public interactions and enforces authenticated mo
 	const publicHeaders = (ip = "192.0.2.1") => ({ Origin: publicOrigin, "Content-Type": "application/json", "x-forwarded-for": ip });
 	const postComment = (body: Row, ip = "192.0.2.1", target = app) => target.request(`${publicOrigin}/api/public/comments`, { method: "POST", headers: publicHeaders(ip), body: JSON.stringify({ articleId: article, name: "访客", body: "普通文本", turnstileToken: "verified-in-isolated-provider", ...body }) });
 	const moderate = (path: string, body: Row = {}, method = "POST", target = app) => target.request(`http://localhost:3000/api${path}`, { method, headers: administrativeHeaders, body: JSON.stringify(body) });
-	const friendApplication = (name: string, ip: string) => app.request(`${publicOrigin}/api/public/friends`, { method: "POST", headers: publicHeaders(ip), body: JSON.stringify({ name, url: `https://${name}.example/`, description: "我的站点", avatar: "https://avatars.example/avatar.png", email: `${name}@example.com`, turnstileToken: "verified-in-isolated-provider" }) });
+	const friendApplication = (name: string, ip: string) => app.request(`${publicOrigin}/api/public/friends`, { method: "POST", headers: publicHeaders(ip), body: JSON.stringify({ name, url: `https://${name}.example/`, description: "我的站点", avatar: "https://avatars.example/avatar.png", email: `${name}@example.com`, turnstileToken: "verified-friend-request" }) });
 	const notificationRows = () => db.query<Row>("SELECT * FROM mail_outbox WHERE site_id=$1 ORDER BY created_at", [site]);
 	function failOutboxDatabase(): Database {
 		function wrap(connection: Database): Database {
@@ -74,6 +75,18 @@ test("real PostgreSQL persists public interactions and enforces authenticated mo
 	try {
 		for (const id of [article, otherArticle, draft, disabled]) await db.query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,'post',$2,$3::jsonb)", [site, id, JSON.stringify({ publishedSource: id === draft ? null : id === disabled ? publishedSource.replace("comment: true", "comment: false") : publishedSource, metadata: { comment: false } })]);
 		await db.query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,'repository','baseline',$2::jsonb)", [site, JSON.stringify({ posts: [article, otherArticle, disabled].map((id) => ({ id })) })]);
+		await t.test("public comments stay closed until explicitly enabled without disabling friend reads", async () => {
+			const before = validations;
+			for (const setting of [undefined, "false", "TRUE", "1"]) {
+				if (setting === undefined) delete process.env.ENABLE_PUBLIC_COMMENTS; else process.env.ENABLE_PUBLIC_COMMENTS = setting;
+				const read = await app.request(`${publicOrigin}/api/public/comments?articleId=${article}`);
+				assert.equal(read.status, 503); assert.equal((await read.json()).error.code, "PUBLIC_COMMENTS_DISABLED");
+				assert.equal((await postComment({}, "192.0.2.90")).status, 503);
+				assert.equal((await app.request(`${publicOrigin}/api/public/friends`)).status, 200);
+			}
+			assert.equal(validations, before);
+			process.env.ENABLE_PUBLIC_COMMENTS = "true";
+		});
 		await t.test("public endpoints require actual published UUID articles, whitelist private fields and preserve pure text replies", async () => {
 			assert.equal((await app.request(`${publicOrigin}/api/public/comments?articleId=legacy-slug`)).status, 400);
 			assert.equal((await app.request(`${publicOrigin}/api/public/comments?articleId=${draft}`)).status, 404);
@@ -93,11 +106,32 @@ test("real PostgreSQL persists public interactions and enforces authenticated mo
 			assert.equal((await postComment({ parentId: parent }, "192.0.2.6")).status, 400);
 			const [stored] = await db.query<Row>("SELECT * FROM comments WHERE site_id=$1 AND id=$2", [site, parent]); assert.equal(stored.body, ""); assert.equal(stored.email, null);
 		});
+		await t.test("comment pagination retains microsecond ordering and parent IDs while bounding every response", async () => {
+			const ids = Array.from({ length: 103 }, () => randomUUID());
+			await db.query("INSERT INTO comments(site_id,id,article_id,parent_id,name,body,visitor_id,status,created_at) SELECT $1,id,$2,CASE WHEN ord=1 THEN NULL ELSE $3 END,'分页访客','短评论','isolated-pagination',CASE WHEN ord=1 THEN 'deleted' ELSE 'visible' END,'2026-10-10T00:00:00.123000Z'::timestamptz+ord*interval '1 microsecond' FROM unnest($4::text[]) WITH ORDINALITY AS ordered(id,ord)", [site, otherArticle, ids[0], ids]);
+			const first = await (await app.request(`${publicOrigin}/api/public/comments?articleId=${otherArticle}`)).json();
+			assert.equal(first.data.length, 50); assert.ok(first.nextCursor); assert.equal(first.data[0].status, "deleted"); assert.equal(first.data[1].parentId, ids[0]);
+			const all = [...first.data]; let cursor: string | null = first.nextCursor;
+			while (cursor) {
+				const response = await app.request(`${publicOrigin}/api/public/comments?articleId=${otherArticle}&cursor=${cursor}`); assert.equal(response.status, 200);
+				const page = await response.json(); all.push(...page.data); cursor = page.nextCursor;
+			}
+			assert.deepEqual(all.map((row: Row) => row.id), ids); assert.equal(new Set(all.map((row: Row) => row.id)).size, 103);
+			const maximum = await (await app.request(`${publicOrigin}/api/public/comments?articleId=${otherArticle}&limit=100`)).json(); assert.equal(maximum.data.length, 100); assert.ok(maximum.nextCursor);
+			for (const limit of ["0", "101", "-1", "abc"]) assert.equal((await app.request(`${publicOrigin}/api/public/comments?articleId=${otherArticle}&limit=${limit}`)).status, 400);
+			assert.equal((await app.request(`${publicOrigin}/api/public/comments?articleId=${article}&cursor=${first.nextCursor}`)).status, 400);
+			for (const value of ["bad", Buffer.from(JSON.stringify([otherArticle, "2026-02-30T00:00:00.123001Z", ids[0]])).toString("base64url")]) assert.equal((await app.request(`${publicOrigin}/api/public/comments?articleId=${otherArticle}&cursor=${value}`)).status, 400);
+			await db.query("UPDATE comments SET body=$3 WHERE site_id=$1 AND article_id=$2 AND status='visible'", [site, otherArticle, "汉".repeat(10_000)]);
+			const bounded = await app.request(`${publicOrigin}/api/public/comments?articleId=${otherArticle}&limit=100`); const body = await bounded.text();
+			assert.equal(bounded.status, 200); assert.ok(Buffer.byteLength(body, "utf8") <= 512 * 1024);
+			const page = JSON.parse(body); assert.ok(page.data.length > 0 && page.data.length < 100); assert.ok(page.nextCursor); assert.equal(page.data[1].parentId, ids[0]);
+		});
 		await t.test("Turnstile fails closed for missing configuration, wrong origin/hostname, false success, stale and unavailable provider", async () => {
 			const before = (await db.query<Row>("SELECT id FROM comments WHERE site_id=$1", [site])).length;
 			delete process.env.TURNSTILE_SECRET_KEY; assert.equal((await postComment({}, "192.0.2.10")).status, 503); process.env.TURNSTILE_SECRET_KEY = "isolated-test-secret";
 			assert.equal((await app.request(`${publicOrigin}/api/public/comments`, { method: "POST", headers: { ...publicHeaders("192.0.2.11"), Origin: "https://attacker.example" }, body: JSON.stringify({ articleId: article, name: "x", body: "x", turnstileToken: "x" }) })).status, 403);
-			for (const result of [{ success: true, hostname: "attacker.example", challenge_ts: new Date().toISOString() }, { success: "true", hostname: "localhost", challenge_ts: new Date().toISOString() }, { success: false, hostname: "localhost", challenge_ts: new Date().toISOString() }, { success: true, hostname: "localhost", challenge_ts: new Date(Date.now() - 600_000).toISOString() }]) { turnstileResult = result; assert.equal((await postComment({}, "192.0.2.12")).status, 403); }
+			for (const [index, result] of [{ success: true, hostname: "attacker.example", challenge_ts: new Date().toISOString() }, { success: "true", hostname: "localhost", challenge_ts: new Date().toISOString() }, { success: false, hostname: "localhost", challenge_ts: new Date().toISOString() }, { success: true, hostname: "localhost", challenge_ts: new Date(Date.now() - 600_000).toISOString() }, { success: true, hostname: "localhost", action: "friend_request", challenge_ts: new Date().toISOString() }, { success: true, hostname: "localhost", action: undefined, challenge_ts: new Date().toISOString() }].entries()) { turnstileResult = result; assert.equal((await postComment({}, `192.0.2.${120 + index}`)).status, 403); }
+			turnstileResult = { success: true, hostname: "localhost", action: "comments", challenge_ts: new Date().toISOString() }; assert.equal((await friendApplication("wrong-action", "192.0.2.14")).status, 403);
 			failNetwork = true; assert.equal((await postComment({}, "192.0.2.13")).status, 503); failNetwork = false;
 			turnstileResult = { success: true, hostname: "localhost", challenge_ts: new Date().toISOString() };
 			assert.equal((await db.query<Row>("SELECT id FROM comments WHERE site_id=$1", [site])).length, before);

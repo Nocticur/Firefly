@@ -1,4 +1,5 @@
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
+import { isIP } from "node:net";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { Context, MiddlewareHandler } from "hono";
 import type { AdminApp, AppEnv } from "./types.js";
@@ -71,6 +72,37 @@ function oauthConfiguration() {
 function requireCanonicalOAuthRequest(context: Context<AppEnv>) {
 	if (new URL(context.req.url).origin !== "https://admin.mourn.top") throw new ApiFailure(403, "OAUTH_ORIGIN_REQUIRED", "GitHub 登录只能在固定管理域名 https://admin.mourn.top 上进行");
 }
+function requireOAuthStartOrigin(request: Request): void {
+	const origin = request.headers.get("origin");
+	if (origin !== null && origin !== "https://admin.mourn.top") throw new ApiFailure(403, "OAUTH_ORIGIN_REQUIRED", "GitHub 登录请求来源不合法");
+	// Ordinary top-level links have no Origin. Block cross-site fetches and frames,
+	// while preserving navigations to the sign-in page and GitHub's callback.
+	if (request.headers.get("sec-fetch-site") === "cross-site" && (request.headers.get("sec-fetch-mode") !== "navigate" || request.headers.has("sec-fetch-dest") && request.headers.get("sec-fetch-dest") !== "document")) throw new ApiFailure(403, "OAUTH_ORIGIN_REQUIRED", "GitHub 登录须通过管理页面发起");
+}
+function oauthClientAddress(request: Request): string {
+	const forwarded = process.env.VERCEL === "1" ? request.headers.get("x-vercel-forwarded-for") : runtimeEnvironment() === "development" ? request.headers.get("x-forwarded-for") || "127.0.0.1" : null;
+	const address = forwarded?.split(",")[0]?.trim();
+	if (!address || !isIP(address)) throw new ApiFailure(503, "OAUTH_CLIENT_UNVERIFIED", "无法验证登录请求来源，请检查受信代理配置");
+	return address;
+}
+
+/** The existing persistent counters use a separate namespace from public interactions. */
+export async function consumeOAuthLoginAllowance(database: Database, siteId: string, request: Request, secret: string): Promise<void> {
+	const subject = `oauth:ip:${createHmac("sha256", secret).update(`${siteId}\0${oauthClientAddress(request)}`).digest("hex")}`;
+	const allowed = await database.transaction(async (tx) => {
+		await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`${siteId}:oauth-login-rate`]);
+		await tx.query("DELETE FROM oauth_states WHERE site_id=$1 AND expires_at<=now()", [siteId]);
+		await tx.query("DELETE FROM sessions WHERE site_id=$1 AND expires_at<=now()", [siteId]);
+		await tx.query("DELETE FROM interaction_rate_limits WHERE site_id=$1 AND subject LIKE 'oauth:%' AND window_start<now()-interval '20 minutes'", [siteId]);
+		const counters = await tx.query<Record<string, unknown> & { subject: string; hits: number }>("SELECT subject,hits FROM interaction_rate_limits WHERE site_id=$1 AND subject IN ($2,'oauth:global') AND window_start=to_timestamp(floor(extract(epoch FROM now())/600)*600)", [siteId, subject]);
+		if (counters.some((row) => Number(row.hits) >= (row.subject === "oauth:global" ? 100 : 5))) return false;
+		// Check the global quota before allocating an IP row, so rotating client
+		// addresses cannot create unlimited rows. Denied IPs do not consume it.
+		await tx.query("INSERT INTO interaction_rate_limits(site_id,subject,window_start,hits) VALUES($1,$2,to_timestamp(floor(extract(epoch FROM now())/600)*600),1),($1,'oauth:global',to_timestamp(floor(extract(epoch FROM now())/600)*600),1) ON CONFLICT(site_id,subject,window_start) DO UPDATE SET hits=interaction_rate_limits.hits+1", [siteId, subject]);
+		return true;
+	});
+	if (!allowed) throw new ApiFailure(429, "OAUTH_RATE_LIMITED", "登录请求过于频繁，请稍后再试");
+}
 async function githubRequest(url: string, init: RequestInit): Promise<Response> {
 	try { return await fetch(url, { ...init, signal: AbortSignal.timeout(15_000) }); }
 	catch { throw new ApiFailure(503, "GITHUB_UNAVAILABLE", "GitHub 认证服务暂时不可用"); }
@@ -79,7 +111,9 @@ async function githubRequest(url: string, init: RequestInit): Promise<Response> 
 export function registerAuthRoutes(app: AdminApp) {
 	app.get("/api/auth/github", async (context) => {
 		requireCanonicalOAuthRequest(context);
-		const { clientId } = oauthConfiguration();
+		requireOAuthStartOrigin(context.req.raw);
+		const { clientId, clientSecret } = oauthConfiguration();
+		await consumeOAuthLoginAllowance(getDatabase(), getSiteId(), context.req.raw, clientSecret);
 		const state = randomBytes(32).toString("base64url");
 		const nonce = randomBytes(32).toString("base64url");
 		await getDatabase().query("INSERT INTO oauth_states(site_id,state_hash,cookie_hash,expires_at) VALUES($1,$2,$3,now()+interval '10 minutes')", [getSiteId(), digest(state), digest(nonce)]);

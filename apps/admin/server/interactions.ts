@@ -12,6 +12,24 @@ type Row = Record<string, unknown>;
 type Dependencies = { db?: Database; site?: string; fetcher?: typeof fetch; dispatchMail?: (id: string) => Promise<void> };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const maximumPublicRows = 10_000;
+const maximumCommentPageBytes = 512 * 1024 - 512;
+type TurnstileAction = "comments" | "friend_request";
+
+function requirePublicComments(): void {
+	if (process.env.ENABLE_PUBLIC_COMMENTS !== "true") throw new ApiFailure(503, "PUBLIC_COMMENTS_DISABLED", "本站暂未开放公开评论");
+}
+function commentPagination(limitValue?: string, cursorValue?: string, articleId?: string): { limit: number; timestamp: string | null; id: string | null } {
+	const limit = limitValue === undefined ? 50 : Number(limitValue);
+	if (!Number.isInteger(limit) || limit < 1 || limit > 100 || (limitValue !== undefined && !/^[1-9]\d{0,2}$/.test(limitValue))) throw new ApiFailure(400, "INVALID_COMMENT_PAGE", "每页评论数量必须为 1 至 100");
+	if (cursorValue === undefined) return { limit, timestamp: null, id: null };
+	let cursor: unknown;
+	try { if (!/^[A-Za-z0-9_-]{20,240}$/.test(cursorValue)) throw new Error(); cursor = JSON.parse(Buffer.from(cursorValue, "base64url").toString("utf8")); } catch { throw new ApiFailure(400, "INVALID_COMMENT_CURSOR", "评论分页游标不合法"); }
+	if (!Array.isArray(cursor) || cursor.length !== 3 || cursor[0] !== articleId || typeof cursor[1] !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(cursor[1]) || !Number.isFinite(Date.parse(cursor[1])) || new Date(cursor[1]).toISOString().slice(0, 19) !== cursor[1].slice(0, 19) || typeof cursor[2] !== "string" || !uuid.test(cursor[2])) throw new ApiFailure(400, "INVALID_COMMENT_CURSOR", "评论分页游标不合法");
+	return { limit, timestamp: cursor[1], id: cursor[2].toLowerCase() };
+}
+function commentCursor(articleId: string, row: Row): string {
+	return Buffer.from(JSON.stringify([articleId, row.cursor_created_at, row.id])).toString("base64url");
+}
 
 function text(value: unknown, field: string, maximum: number, optional = false): string {
 	if (optional && (value === undefined || value === null || value === "")) return "";
@@ -72,7 +90,7 @@ export function visitorSubject(request: Request, site: string): string {
 	const { secret } = turnstileConfiguration(request);
 	return createHmac("sha256", process.env.INTERACTION_HASH_SECRET || secret).update(`${site}\0${clientAddress(request)}`).digest("hex");
 }
-export async function verifyTurnstile(request: Request, token: unknown, fetcher: typeof fetch = fetch): Promise<void> {
+export async function verifyTurnstile(request: Request, token: unknown, action: TurnstileAction, fetcher: typeof fetch = fetch): Promise<void> {
 	const { secret, hostname } = turnstileConfiguration(request);
 	const responseToken = text(token, "人机验证令牌", 2048);
 	let response: Response;
@@ -83,7 +101,7 @@ export async function verifyTurnstile(request: Request, token: unknown, fetcher:
 	let result: Row;
 	try { result = await response.json() as Row; } catch { throw new ApiFailure(503, "TURNSTILE_UNAVAILABLE", "人机验证服务返回无效结果"); }
 	const challengeTime = typeof result?.challenge_ts === "string" ? Date.parse(result.challenge_ts) : NaN;
-	if (!result || result.success !== true || result.hostname !== hostname || !Number.isFinite(challengeTime) || challengeTime < Date.now() - 5 * 60_000 || challengeTime > Date.now() + 60_000 || (Array.isArray(result["error-codes"]) && result["error-codes"].length)) throw new ApiFailure(403, "TURNSTILE_REJECTED", "人机验证未通过，请重新验证");
+	if (!result || result.success !== true || result.hostname !== hostname || result.action !== action || !Number.isFinite(challengeTime) || challengeTime < Date.now() - 5 * 60_000 || challengeTime > Date.now() + 60_000 || (Array.isArray(result["error-codes"]) && result["error-codes"].length)) throw new ApiFailure(403, "TURNSTILE_REJECTED", "人机验证未通过，请重新验证");
 }
 async function consumeRateLimit(db: Database, site: string, subject: string, resource: "comments" | "friends"): Promise<void> {
 	const seconds = resource === "comments" ? 60 : 3600;
@@ -175,14 +193,27 @@ export function registerInteractionRoutes(app: AdminApp, dependencies: Dependenc
 	const database = () => dependencies.db || getDatabase(); const siteId = () => dependencies.site || getSiteId();
 	app.use("/api/public/*", async (context, next) => { context.header("Cache-Control", "no-store"); await next(); });
 	app.get("/api/public/comments", async (c) => {
+		requirePublicComments();
 		const articleId = identifier(c.req.query("articleId"), "文章 ID"); const db = database(); const site = siteId();
-		const data = await db.transaction(async (tx) => { await publishedArticle(tx, site, articleId); return (await tx.query<Row>("SELECT id,article_id,parent_id,name,body,status,created_at FROM comments WHERE site_id=$1 AND article_id=$2 ORDER BY created_at,id LIMIT $3", [site, articleId, maximumPublicRows])).map((row) => commentRecord(row)); });
-		return c.json({ data });
+		const page = commentPagination(c.req.query("limit"), c.req.query("cursor"), articleId);
+		const result = await db.transaction(async (tx) => {
+			await publishedArticle(tx, site, articleId);
+			const rows = await tx.query<Row>("SELECT id,article_id,parent_id,name,body,status,created_at,to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS cursor_created_at FROM comments WHERE site_id=$1 AND article_id=$2 AND ($4::timestamptz IS NULL OR (created_at,id)>($4::timestamptz,$5::text)) ORDER BY created_at,id LIMIT $3", [site, articleId, page.limit + 1, page.timestamp, page.id]);
+			const data: Row[] = []; let bytes = 0;
+			for (const row of rows.slice(0, page.limit)) {
+				const record = commentRecord(row); const size = Buffer.byteLength(JSON.stringify(record), "utf8") + 1;
+				if (bytes + size > maximumCommentPageBytes) { if (!data.length) throw new ApiFailure(409, "COMMENT_DATA_INVALID", "评论数据超过安全响应上限"); break; }
+				data.push(record); bytes += size;
+			}
+			return { data, nextCursor: rows.length > data.length ? commentCursor(articleId, rows[data.length - 1]) : null };
+		});
+		return c.json(result);
 	});
 	app.post("/api/public/comments", async (c) => {
+		requirePublicComments();
 		const body = await readJson(c.req.raw, 32 * 1024); const articleId = identifier(body.articleId, "文章 ID"); const parentId = body.parentId == null ? null : identifier(body.parentId, "回复 ID");
 		const name = text(body.name, "昵称", 120); const content = text(body.body, "评论", 10_000); const address = email(body.email, true); const db = database(); const site = siteId(); const visitor = visitorSubject(c.req.raw, site);
-		await consumeRateLimit(db, site, visitor, "comments"); await verifyTurnstile(c.req.raw, body.turnstileToken, dependencies.fetcher);
+		await consumeRateLimit(db, site, visitor, "comments"); await verifyTurnstile(c.req.raw, body.turnstileToken, "comments", dependencies.fetcher);
 		const data = await db.transaction(async (tx) => {
 			await lockVisitor(tx, site, visitor); await publishedArticle(tx, site, articleId);
 			if (parentId && !(await tx.query("SELECT id FROM comments WHERE site_id=$1 AND id=$2 AND article_id=$3 AND status='visible' FOR SHARE", [site, parentId, articleId])).length) throw new ApiFailure(400, "INVALID_COMMENT_PARENT", "回复必须属于同一篇文章中的可见评论");
@@ -193,7 +224,7 @@ export function registerInteractionRoutes(app: AdminApp, dependencies: Dependenc
 	app.get("/api/public/friends", async (c) => c.json({ data: await publicFriends(database(), siteId()) }));
 	app.post("/api/public/friends", async (c) => {
 		const body = await readJson(c.req.raw, 16 * 1024); const name = text(body.name, "站点名称", 120); const url = safeInteractionUrl(body.url); const description = text(body.description, "站点描述", 2000); const avatar = safeInteractionUrl(body.avatar, true); const address = email(body.email); const db = database(); const site = siteId(); const visitor = visitorSubject(c.req.raw, site);
-		await consumeRateLimit(db, site, visitor, "friends"); await verifyTurnstile(c.req.raw, body.turnstileToken, dependencies.fetcher);
+		await consumeRateLimit(db, site, visitor, "friends"); await verifyTurnstile(c.req.raw, body.turnstileToken, "friend_request", dependencies.fetcher);
 		const data = await db.transaction(async (tx) => {
 			await lockVisitor(tx, site, visitor); await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`${site}:friend-url:${url}`]);
 			if ((await tx.query("SELECT id FROM friends WHERE site_id=$1 AND url=$2 AND status IN ('pending','approved','published')", [site, url])).length) throw new ApiFailure(409, "FRIEND_APPLICATION_EXISTS", "此站点已有申请，请勿重复提交");

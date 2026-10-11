@@ -325,6 +325,7 @@ class FriendApplication extends HTMLElement {
 			const widget = await mountTurnstile(
 				container,
 				siteKey,
+				"friend_request",
 				(token, issue) => {
 					if (signal.aborted) return;
 					this.token = token;

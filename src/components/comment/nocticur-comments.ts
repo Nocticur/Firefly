@@ -1,5 +1,5 @@
 import {
-	fetchPublicData,
+	fetchPublicCommentPage,
 	mountTurnstile,
 	type PublicComment,
 	submitPublicInteraction,
@@ -19,6 +19,8 @@ export function registerNocticurComments(): void {
 		private parentId: string | null = null;
 		private comments = new Map<string, PublicComment>();
 		private loadVersion = 0;
+		private commentsLoading = false;
+		private nextCursor: string | null = null;
 
 		connectedCallback(): void {
 			this.lifecycle?.abort();
@@ -26,6 +28,9 @@ export function registerNocticurComments(): void {
 			this.lifecycle = lifecycle;
 			this.token = "";
 			this.busy = false;
+			this.commentsLoading = false;
+			this.nextCursor = null;
+			this.comments.clear();
 			this.cancelReply();
 			this.updateSubmitButton();
 			const articleId = this.dataset.articleId ?? "";
@@ -80,7 +85,17 @@ export function registerNocticurComments(): void {
 			}
 			if (button)
 				button.disabled =
-					this.busy || !this.token || !UUID.test(this.dataset.articleId ?? "");
+					this.busy ||
+					this.commentsLoading ||
+					!this.token ||
+					!UUID.test(this.dataset.articleId ?? "");
+			const more = this.querySelector<HTMLButtonElement>(
+				"[data-load-more-comments]",
+			);
+			if (more) {
+				more.hidden = !this.nextCursor;
+				more.disabled = this.busy || this.commentsLoading;
+			}
 		}
 
 		private async setupVerification(signal: AbortSignal): Promise<void> {
@@ -98,6 +113,7 @@ export function registerNocticurComments(): void {
 				const verification = await mountTurnstile(
 					container,
 					siteKey,
+					"comments",
 					(token, issue) => {
 						this.token = token;
 						this.setStatus(
@@ -133,32 +149,48 @@ export function registerNocticurComments(): void {
 		private async loadComments(
 			articleId: string,
 			signal: AbortSignal,
+			append = false,
 		): Promise<void> {
+			if (this.commentsLoading || (append && !this.nextCursor)) return;
 			const version = ++this.loadVersion;
+			const cursor = append ? (this.nextCursor ?? undefined) : undefined;
+			this.commentsLoading = true;
+			this.updateSubmitButton();
 			this.setStatus("[data-comments-status]", "正在加载评论…");
 			try {
-				const comments = await fetchPublicData<PublicComment>("comments", {
-					articleId,
+				const page = await fetchPublicCommentPage(articleId, {
+					cursor,
 					signal,
 				});
 				if (signal.aborted || version !== this.loadVersion) return;
-				this.comments = new Map(
-					comments.map((comment) => [comment.id, comment]),
-				);
-				this.renderComments(comments);
-				this.setStatus(
-					"[data-comments-status]",
-					comments.length
-						? `共 ${comments.length} 条评论`
-						: "暂无评论，欢迎留言。",
-				);
+				if (cursor && page.nextCursor === cursor)
+					throw new Error("评论分页未能继续，请稍后重试。");
+				if (!append) this.comments.clear();
+				for (const comment of page.data) this.comments.set(comment.id, comment);
+				this.nextCursor = page.nextCursor;
+				this.renderComments([...this.comments.values()]);
+				this.updateCommentCount();
 			} catch (error) {
 				if (signal.aborted || version !== this.loadVersion) return;
 				this.setStatus(
 					"[data-comments-status]",
 					error instanceof Error ? error.message : "评论加载失败，请稍后重试。",
 				);
+			} finally {
+				if (!signal.aborted && version === this.loadVersion) {
+					this.commentsLoading = false;
+					this.updateSubmitButton();
+				}
 			}
+		}
+
+		private updateCommentCount(): void {
+			this.setStatus(
+				"[data-comments-status]",
+				this.comments.size
+					? `已加载 ${this.comments.size} 条评论${this.nextCursor ? "（还有更多）" : ""}`
+					: "暂无评论，欢迎留言。",
+			);
 		}
 
 		private renderComments(comments: PublicComment[]): void {
@@ -218,6 +250,12 @@ export function registerNocticurComments(): void {
 			if (!(event.target instanceof Element)) return;
 			const button = event.target.closest<HTMLButtonElement>("button");
 			if (!button || !this.contains(button)) return;
+			if (button.hasAttribute("data-load-more-comments")) {
+				const signal = this.lifecycle?.signal;
+				if (signal && !this.busy)
+					void this.loadComments(this.dataset.articleId ?? "", signal, true);
+				return;
+			}
 			if (button.hasAttribute("data-cancel-reply")) {
 				this.cancelReply();
 				return;
@@ -235,7 +273,7 @@ export function registerNocticurComments(): void {
 			event.preventDefault();
 			const form = this.querySelector<HTMLFormElement>("[data-comment-form]");
 			const signal = this.lifecycle?.signal;
-			if (!form || !signal || signal.aborted || this.busy) return;
+				if (!form || !signal || signal.aborted || this.busy || this.commentsLoading) return;
 			if (!this.token) {
 				this.setStatus("[data-submit-status]", "请先完成人机验证。");
 				return;
@@ -253,7 +291,7 @@ export function registerNocticurComments(): void {
 			this.setStatus("[data-submit-status]", "正在提交评论…");
 			try {
 				const articleId = this.dataset.articleId ?? "";
-				await submitPublicInteraction(
+				const submitted = await submitPublicInteraction(
 					"comments",
 					{
 						articleId,
@@ -266,13 +304,17 @@ export function registerNocticurComments(): void {
 					signal,
 				);
 				if (signal.aborted) return;
+				if (!submitted)
+					throw new Error("评论提交结果不完整，请重新加载页面核查。");
+				this.comments.set(submitted.id, submitted);
+				this.renderComments([...this.comments.values()]);
+				this.updateCommentCount();
 				const input = form.querySelector<HTMLTextAreaElement>(
 					"textarea[name='body']",
 				);
 				if (input) input.value = "";
 				this.cancelReply();
 				this.setStatus("[data-submit-status]", "评论已提交。");
-				await this.loadComments(articleId, signal);
 			} catch (error) {
 				if (signal.aborted) return;
 				this.setStatus(

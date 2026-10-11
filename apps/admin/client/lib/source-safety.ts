@@ -16,7 +16,15 @@ export type DocumentNode = {
 };
 
 const escapeHTML = (value: unknown) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-const unescapeHTML = (value: string) => value.replace(/&#(x[\da-f]+|\d+);?/gi, (_, code: string) => String.fromCodePoint(code[0].toLowerCase() === "x" ? parseInt(code.slice(1), 16) : parseInt(code, 10))).replace(/&(?:colon|Tab|NewLine);/g, (entity) => ({ "&colon;": ":", "&Tab;": "\t", "&NewLine;": "\n" })[entity] ?? entity).replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+const unescapeHTML = (value: string): string | null => {
+	let valid = true;
+	const decoded = value.replace(/&#(x[\da-f]+|\d+);?/gi, (_, code: string) => {
+		const point = code[0].toLowerCase() === "x" ? parseInt(code.slice(1), 16) : parseInt(code, 10);
+		if (!Number.isInteger(point) || point < 1 || point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff)) { valid = false; return ""; }
+		return String.fromCodePoint(point);
+	});
+	return valid ? decoded.replace(/&(?:colon|Tab|NewLine);/g, (entity) => ({ "&colon;": ":", "&Tab;": "\t", "&NewLine;": "\n" })[entity] ?? entity).replace(/&quot;/g, '"').replace(/&amp;/g, "&") : null;
+};
 
 /** Explicit table HTML preserves merged cells, multi-paragraph cells and column widths. */
 export function serializeSafeTable(node: DocumentNode): string {
@@ -78,7 +86,9 @@ export function isSafeTableHTML(html: string): boolean {
 		while (remaining) {
 			const attr = remaining.match(/^\s+([a-z-]+)="([^"<>]*)"/);
 			if (!attr || attr[1] in attrs) return false;
-			attrs[attr[1]] = unescapeHTML(attr[2]);
+				const value = unescapeHTML(attr[2]);
+				if (value === null) return false;
+				attrs[attr[1]] = value;
 			remaining = remaining.slice(attr[0].length);
 		}
 		for (const [name, value] of Object.entries(attrs)) {

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Resend } from "resend";
 import { getDatabase, getSiteId, type Database } from "./db.js";
 import { requireAdmin } from "./auth.js";
-import { ApiFailure, readJson } from "./security.js";
+import { ApiFailure, readJson, readText } from "./security.js";
 import type { AdminApp } from "./types.js";
 
 export type MailRow = Record<string, unknown> & { id: string; notification_key: string; recipient: string; subject: string; text_body: string; status: string; provider_id: string | null; attempts: number; first_attempt_at: Date | null; next_attempt_at: Date; created_at: Date; };
@@ -161,7 +161,7 @@ export function registerMailRoutes(app: AdminApp): void {
 	});
 	app.post("/api/mail/:id/reconcile", requireAdmin, async (c) => { const body = await readJson(c.req.raw); return c.json({ data: { state: await reconcileMail(c.req.param("id"), typeof body.providerId === "string" ? body.providerId : undefined) } }); });
 	app.post("/api/webhooks/resend", async (c) => {
-		await processResendWebhook(await c.req.text(), { id: c.req.header("svix-id") || "", timestamp: c.req.header("svix-timestamp") || "", signature: c.req.header("svix-signature") || "" });
+		await processResendWebhook(await readText(c.req.raw, 128 * 1024), { id: c.req.header("svix-id") || "", timestamp: c.req.header("svix-timestamp") || "", signature: c.req.header("svix-signature") || "" });
 		return c.json({ data: { received: true } });
 	});
 }

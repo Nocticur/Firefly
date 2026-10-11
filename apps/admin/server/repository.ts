@@ -6,6 +6,7 @@ import { validatePostSource } from "./source-document.js";
 import { readRepositoryFiles } from "./github.js";
 
 type SourceFile = { path: string; source: string };
+type RepositoryReader = (sha?: string) => Promise<Awaited<ReturnType<typeof readRepositoryFiles>>>;
 type PublishedPost = { id?: string; filePath?: string; path?: string; slug?: string; sourceSha256?: string };
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
 function readJsonFile(files: SourceFile[], path: string): unknown {
@@ -17,7 +18,7 @@ function baselineSlug(path: string): string {
 	return path.replace(/^src\/content\/posts\//, "").replace(/\.(?:md|mdx)$/i, "").replace(/(?:^|\/)index$/, "").replace(/\/$/, "");
 }
 
-export async function importRepository(database: Database, siteId: string, reader = readRepositoryFiles) {
+export async function importRepository(database: Database, siteId: string, reader: RepositoryReader = readRepositoryFiles) {
 	let repository: Awaited<ReturnType<typeof readRepositoryFiles>>;
 	try { repository = await reader(); }
 	catch (error) {
@@ -58,8 +59,50 @@ export async function importRepository(database: Database, siteId: string, reade
 		}
 		for (const kind of ["settings", "navigation"] as const) await tx.query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,$2,'default',$3::jsonb)", [siteId, kind, JSON.stringify(managed[kind])]);
 		if (isRecord(managed.icons)) await tx.query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,'icons','default',$2::jsonb)", [siteId, JSON.stringify(managed.icons)]);
-		const baseline = { headSha: repository.headSha, snapshotId: isRecord(state) ? state.snapshotId || null : null, importedAt: new Date().toISOString(), importedPosts: posts.length, publishedSettings: managed.settings, publishedNavigation: managed.navigation, publishedIcons: managed.icons || {}, publishedState: state || null, posts: mapping, redirects: Array.isArray(redirects) ? redirects : [], ...(deploymentConfig !== undefined ? { deploymentConfig } : {}) };
+		const baseline = { headSha: repository.headSha, repositoryFiles: files, snapshotId: isRecord(state) ? state.snapshotId || null : null, importedAt: new Date().toISOString(), importedPosts: posts.length, publishedSettings: managed.settings, publishedNavigation: managed.navigation, publishedIcons: managed.icons || {}, publishedState: state || null, posts: mapping, redirects: Array.isArray(redirects) ? redirects : [], ...(deploymentConfig !== undefined ? { deploymentConfig } : {}) };
 		await tx.query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,'repository','baseline',$2::jsonb)", [siteId, JSON.stringify(baseline)]);
 		return { imported: true, headSha: repository.headSha, records: posts.length, publicPosts: posts.filter((file) => validatePostSource(file.source).draft !== true).length };
+	});
+}
+
+export type RepositoryDifference = { path: string; expectedSource: string | null; remoteSource: string | null; expectedSha256: string | null; remoteSha256: string | null };
+export function compareRepositoryFiles(expected: SourceFile[], remote: SourceFile[]): RepositoryDifference[] {
+	const before = new Map(expected.map((file) => [file.path, file.source])); const after = new Map(remote.map((file) => [file.path, file.source]));
+	return [...new Set([...before.keys(), ...after.keys()])].sort().filter((path) => before.get(path) !== after.get(path)).map((path) => {
+		const expectedSource = before.get(path) ?? null; const remoteSource = after.get(path) ?? null;
+		return { path, expectedSource, remoteSource, expectedSha256: expectedSource === null ? null : digest(expectedSource), remoteSha256: remoteSource === null ? null : digest(remoteSource) };
+	});
+}
+
+/** Only code-only Git changes may advance the baseline. Private SQL drafts stay untouched. */
+export async function synchronizeRepository(database: Database, siteId: string, expectedHeadSha: string, reader: RepositoryReader = readRepositoryFiles) {
+	if (!/^[a-f0-9]{40}$/i.test(expectedHeadSha)) throw new ApiFailure(400, "BASELINE_REVISION_REQUIRED", "提供已读取基线的完整 expectedHeadSha");
+	const [initial] = await database.query<Record<string, unknown> & { data: Record<string, unknown> }>("SELECT data FROM entities WHERE site_id=$1 AND kind='repository' AND id='baseline'", [siteId]);
+	if (!initial) throw new ApiFailure(409, "BASELINE_REQUIRED", "先导入仓库基线，再核对代码更新");
+	if (initial.data.headSha !== expectedHeadSha) throw new ApiFailure(409, "BASELINE_REVISION_CONFLICT", "仓库基线已变化，请刷新后重新核对");
+	const remote = await reader();
+	if (!/^[a-f0-9]{40}$/i.test(remote.headSha)) throw new ApiFailure(503, "REPOSITORY_REVISION_INVALID", "远端未返回有效 Git 版本");
+	// Earlier baselines do not store a file ledger. Read their immutable Git tree,
+	// never current master, rather than inventing an empty or mutable baseline.
+	let evidence: SourceFile[];
+	if (Array.isArray(initial.data.repositoryFiles)) evidence = initial.data.repositoryFiles as SourceFile[];
+	else {
+		const historical = await reader(expectedHeadSha);
+		if (historical.headSha !== expectedHeadSha) throw new ApiFailure(409, "BASELINE_EVIDENCE_INVALID", "未能读取基线的固定 Git 版本，拒绝同步");
+		evidence = historical.files;
+	}
+	if (evidence.some((file) => !isRecord(file) || typeof file.path !== "string" || typeof file.source !== "string") || new Set(evidence.map((file) => file.path)).size !== evidence.length) throw new ApiFailure(409, "BASELINE_EVIDENCE_INVALID", "基线文件证据不完整，保留草稿并人工检查");
+	const differences = compareRepositoryFiles(evidence, remote.files);
+	return database.transaction(async (tx) => {
+		await tx.query("SELECT pg_advisory_xact_lock_shared(hashtext($1))", [`${siteId}:production-write`]);
+		await tx.query("INSERT INTO release_locks(site_id) VALUES($1) ON CONFLICT DO NOTHING", [siteId]);
+		await tx.query("SELECT site_id FROM release_locks WHERE site_id=$1 FOR UPDATE", [siteId]);
+		const [current] = await tx.query<Record<string, unknown> & { data: Record<string, unknown> }>("SELECT data FROM entities WHERE site_id=$1 AND kind='repository' AND id='baseline' FOR UPDATE", [siteId]);
+		if (current?.data.headSha !== expectedHeadSha) throw new ApiFailure(409, "BASELINE_REVISION_CONFLICT", "核对期间仓库基线已变化，请重新读取");
+		if ((await tx.query("SELECT id FROM release_tasks WHERE site_id=$1 AND kind='publish' AND (state NOT IN ('verified','failed','conflict') OR details->>'restoreRequiresReconciliation'='true') LIMIT 1", [siteId])).length) throw new ApiFailure(409, "PUBLISH_RECONCILIATION_REQUIRED", "先核查所有未完成或恢复的发布，再同步代码基线");
+		if (differences.length) throw new ApiFailure(409, "MANAGED_REPOSITORY_CONFLICT", "远端管理内容已变更；请审阅逐文件差异并通过独立合并处理，未推进基线且保留全部私有草稿", { baseSha: expectedHeadSha, remoteSha: remote.headSha, diff: differences });
+		const rows = await tx.query("UPDATE entities SET data=data || $3::jsonb,updated_at=now() WHERE site_id=$1 AND kind='repository' AND id='baseline' AND data->>'headSha'=$2 RETURNING id", [siteId, expectedHeadSha, JSON.stringify({ headSha: remote.headSha, repositoryFiles: remote.files, synchronizedAt: new Date().toISOString() })]);
+		if (!rows.length) throw new ApiFailure(409, "BASELINE_REVISION_CONFLICT", "仓库基线已变化，请重新核对");
+		return { synchronized: true, previousHeadSha: expectedHeadSha, headSha: remote.headSha, managedFiles: remote.files.length, message: "已确认管理文件字节完全相同，代码基线已同步；所有私有草稿保持原版本" };
 	});
 }
