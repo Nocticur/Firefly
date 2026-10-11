@@ -10,6 +10,7 @@ import { createPost, savePost, getPost, registerContentRoutes, type PostVersion 
 import { importRepository } from "../server/repository.js";
 import { saveManagedEntity } from "../server/settings.js";
 import { digest, ApiFailure } from "../server/security.js";
+import { entryCookie } from "./entry-fixture.js";
 
 const databaseUrl = process.env.ADMIN_TEST_DATABASE_URL;
 const source = '---\n# original YAML comment\ntitle: "旧标题"\npublished: 2026-09-10\ndraft: false\nunknown: { keep: [1, 2] }\n---\n<div>literal HTML</div>\n\nbody\n';
@@ -56,7 +57,7 @@ test("real PostgreSQL protects revisions, history, sessions, isolation and initi
 		const app = new Hono<AppEnv>();
 		app.onError((error, context) => error instanceof ApiFailure ? error.getResponse() : context.json({ error: { code: "INTERNAL", message: "test error" } }, 500));
 		registerAuthRoutes(app); registerContentRoutes(app);
-		const cookie = `__Host-admin-session=${session.token}`;
+		const cookie = `__Host-admin-session=${session.token}; ${entryCookie()}`;
 		const writeHeaders = { cookie, Origin: "http://localhost:3000", "Content-Type": "application/json", "x-csrf-token": session.csrfToken };
 		await t.test("authentication fails closed, binds numeric ID, checks origin/CSRF and returns recoverable CSRF", async () => {
 			assert.equal((await app.request("http://localhost:3000/api/posts")).status, 401);

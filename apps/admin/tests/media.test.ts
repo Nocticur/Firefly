@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import { BlobNotFoundError, type GetBlobResult, type HeadBlobResult } from "@vercel/blob";
 import { createDatabase, getDatabase, getSiteId, type Database } from "../server/db.js";
 import { issueSession } from "../server/auth.js";
+import { entryCookie } from "./entry-fixture.js";
 import { blobToken, isPublicAddress, publishMediaForSnapshot, registerMediaRoutes, safeMediaType, validateImportUrl, type FrozenMedia, type MediaPublicationOptions } from "../server/media.js";
 import { ApiFailure } from "../server/security.js";
 import type { AppEnv } from "../server/types.js";
@@ -249,7 +250,7 @@ test("authenticated media validation rejects inherited MIME names and HTTPS redi
 		const db = getDatabase(); const selectedSite = getSiteId();
 		try {
 			const session = await issueSession(db, selectedSite, { id: "12345", login: "test-admin", name: "Test administrator", avatarUrl: "" });
-			const headers = { Cookie: `__Host-admin-session=${session.token}`, Origin: "http://localhost:3000", "Content-Type": "application/json", "x-csrf-token": session.csrfToken };
+			const headers = { Cookie: `__Host-admin-session=${session.token}; ${entryCookie()}`, Origin: "http://localhost:3000", "Content-Type": "application/json", "x-csrf-token": session.csrfToken };
 			const app = new Hono<AppEnv>();
 			app.onError((error, context) => error instanceof ApiFailure ? error.getResponse() : context.json({ error: { code: "UNEXPECTED" } }, 500));
 			registerMediaRoutes(app);

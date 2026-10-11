@@ -7,6 +7,7 @@ import type { AppEnv } from "../server/types.js";
 import { consumeOAuthLoginAllowance, registerAuthRoutes } from "../server/auth.js";
 import { createDatabase, getDatabase, getSiteId } from "../server/db.js";
 import { ApiFailure } from "../server/security.js";
+import { entryCookie } from "./entry-fixture.js";
 
 const databaseUrl = process.env.ADMIN_TEST_DATABASE_URL;
 const secret = "isolated-test-only-oauth-secret";
@@ -67,6 +68,7 @@ test("OAuth launch counters persist, serialize concurrent requests and clean exp
 		});
 		await t.test("OAuth HTTP starts reject foreign Origin/fetch/frame and preserve ordinary top-level navigation", async () => {
 			const app = new Hono<AppEnv>(); app.onError((error) => error instanceof ApiFailure ? error.getResponse() : new Response("Test error", { status: 500 })); registerAuthRoutes(app);
+			const cookie = entryCookie();
 			const countStates = async () => Number((await db.query("SELECT count(*)::int AS count FROM oauth_states WHERE site_id=$1", [site]))[0].count);
 			const before = await countStates();
 			const foreignRequests: Record<string, string>[] = [{ Origin: "https://untrusted.invalid" }, { "sec-fetch-site": "cross-site", "sec-fetch-mode": "cors" }, { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe" }];
@@ -74,14 +76,14 @@ test("OAuth launch counters persist, serialize concurrent requests and clean exp
 				const response = await app.request("https://admin.mourn.top/api/auth/github", { headers }); assert.equal(response.status, 403);
 			}
 			assert.equal(await countStates(), before);
-			const navigation = await app.request("https://admin.mourn.top/api/auth/github", { headers: { "x-forwarded-for": "198.51.100.23", "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" } });
+			const navigation = await app.request("https://admin.mourn.top/api/auth/github", { headers: { cookie, "x-forwarded-for": "198.51.100.23", "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" } });
 			assert.equal(navigation.status, 302);
 			const location = new URL(navigation.headers.get("location")!);
 			assert.equal(location.origin, "https://github.com"); assert.equal(location.searchParams.get("redirect_uri"), "https://admin.mourn.top/api/auth/callback");
 			assert.match(navigation.headers.get("set-cookie")!, /__Host-admin-oauth=.*HttpOnly/);
 			assert.equal(navigation.headers.get("cache-control"), "no-store");
 			assert.equal(await countStates(), before + 1);
-			assert.equal((await app.request("https://admin.mourn.top/api/auth/github", { headers: { Origin: "https://admin.mourn.top", "x-forwarded-for": "198.51.100.23" } })).status, 302);
+			assert.equal((await app.request("https://admin.mourn.top/api/auth/github", { headers: { cookie, Origin: "https://admin.mourn.top", "x-forwarded-for": "198.51.100.23" } })).status, 302);
 			assert.equal(await countStates(), before + 2);
 		});
 	} finally {

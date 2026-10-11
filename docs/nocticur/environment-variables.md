@@ -25,12 +25,17 @@
 | `APP_ENV` | 各环境必填 | Production 填 `production`，Preview 填 `preview`，本地填 `development`；与平台 `VERCEL_ENV` 一致 |
 | `GITHUB_REPOSITORY` | 固定值 | `Nocticur/Firefly`，用于站点/环境数据命名空间；发布目标固定为该仓库 `master` |
 | `ADMIN_GITHUB_USER_ID` | 登录必填 | `285582250`，你的 GitHub **数字用户 ID**，不是用户名或 App ID |
+| `ADMIN_ENTRY_PASSWORD` | 登录必填，秘密 | 你自行设置的后台入口密码，至少 12 个字符、UTF-8 最多 256 字节；建议密码管理器生成 16 位以上随机密码。仅在**管理项目**填写，不加 `PUBLIC_` / `VITE_` 前缀，各环境使用不同值 |
 | `ADMIN_ORIGIN` | Production 固定值 | `https://admin.mourn.top`，后台 HTTPS origin，不含末尾 `/` |
 | `PUBLIC_SITE_ORIGIN` | Production 固定值 | `https://blog.mourn.top`，博客 HTTPS origin，不含末尾 `/` |
 | `ADMIN_PRODUCTION_DATABASE_URL` | 后台必填，秘密 | Neon 生产 PostgreSQL TLS 连接串，保存草稿、历史、会话、任务和通知。也接受 Marketplace 别名 `DATABASE_URL`，两者无需重复填 |
 | `RESTORE_DATABASE_URL` | 恢复功能需要，秘密 | 独立恢复演练库连接，**数据库名与生产不同**且已应用 001–004 迁移；仅换同名 `neondb` 分支不满足要求 |
 
 数据库连接示意：`postgresql://<用户>:<密码>@<Neon主机>/<数据库名>?sslmode=require`，使用 Neon 提供的值。`/api/health` 正常不证明数据库已连接或迁移完成。
+
+博客作者卡片和手机导航菜单的“后台管理”按钮指向 `https://admin.mourn.top/`。先输入 `ADMIN_ENTRY_PASSWORD`，通过后继续 GitHub 身份验证；密码不能代替管理员账号验证。密码未配置、过短或超长时入口关闭。校验通过的 HttpOnly / Secure Cookie 有效 12 小时；旧 GitHub 会话也必须补做密码校验。修改密码并重新部署后旧入口凭证失效；退出登录同时清除两种 Cookie。密码不写入数据库、Git 或浏览器存储。
+
+Vercel 保存新变量后，重新部署**管理项目**，现有部署不会自动更新密码。保持 Hobby 免费套餐；免费服务选择及额度约束见 [免费部署说明](./free-deployment.md)。
 
 ## 管理项目：GitHub
 

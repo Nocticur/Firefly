@@ -2,6 +2,8 @@
 
 本说明对应已选择的 Firefly 方案。先完成服务配置，在已确定的 Production 配置中按验收需要分别开启发布、邮件和维护；完成 [acceptance.md](./acceptance.md) 平台验收后再投入正式运行。实际秘密值填写在 Vercel / GitHub / Neon / Resend 的安全配置页面，不发送到聊天，不写入仓库、构建产物或日志。
 
+本项目按用户要求使用 **Vercel Hobby 免费套餐**部署，配套服务选择 Free；不升级 Pro，不购买附加项。先阅读 [免费部署说明](./free-deployment.md)。后台密码由管理项目的 `ADMIN_ENTRY_PASSWORD` 提供，至少 12 个字符，建议随机 16 位以上；添加或更换后重新部署管理项目。密码通过后仍须使用已配置的 GitHub 管理员账号验证。
+
 ## 两个 Vercel 项目
 
 两个项目连接 `Nocticur/Firefly`，Production Branch 均为 `master`，使用同一根 `pnpm-lock.yaml`。

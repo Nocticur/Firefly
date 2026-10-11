@@ -4,6 +4,8 @@
 
 2026-10-11 安全复审后的最终回归已完成，以下数字对应更新后的源码和锁文件。修复及剩余边界见 [security-review.md](./security-review.md)；变量的来源见 [environment-variables.md](./environment-variables.md)。
 
+同日新增后台密码入口与免费部署说明后再次回归，后台测试增加至 179 项；进入页、截图与安全边界见 [admin-entry-review.md](./admin-entry-review.md)。原安全复审压缩包仍保存此前快照，新增入口以 Git 交付为准。
+
 ## 当前执行结果
 
 | 检查 | 状态 | 证据与范围 |
@@ -12,7 +14,7 @@
 | 只读来源与原图 | 已执行 | 来源提交 `c075ac36c1313dc6ee47f7690c1a360aaa087da8`；原图 SHA256 为 `3a7ed7bac3634bb05876966b415600c9f3862be08e1df09b10142cb0c622b01f`，见迁移 provenance |
 | 内容迁移与基线 | 已执行 | 基线与 provenance 保存原 14 条、迁入两篇及正文哈希；本地管理导入 16 条、公开映射 15 篇，原草稿继续私有 |
 | `pnpm check` | 已执行，通过 | [blog-check-final.log](/workspace/.firefly-environment/blog-check-final.log)：272 文件，0 errors、0 warnings、0 hints |
-| 后台完整测试 | 已执行，通过 | [admin-tests-final.log](/workspace/.firefly-environment/admin-tests-final.log)：161 通过、0 失败、0 跳过；使用隔离真实 PostgreSQL，GitHub / Vercel / Blob / Resend / Turnstile 为受控替身 |
+| 后台完整测试 | 已执行，通过 | [admin-tests-final.log](/workspace/.firefly-environment/admin-tests-final.log)：179 通过、0 失败、0 跳过；使用隔离真实 PostgreSQL，GitHub / Vercel / Blob / Resend / Turnstile 为受控替身 |
 | 发布清单测试 | 已执行，通过 | [manifest-tests-final.log](/workspace/.firefly-environment/manifest-tests-final.log)：13 通过、0 失败、0 跳过；验证文章映射、草稿隔离、内容摘要、实际构建产物和永久重定向 |
 | 根与后台最终类型检查 | 已执行，通过 | [blog-typecheck-final.log](/workspace/.firefly-environment/blog-typecheck-final.log) 与 [admin-typecheck-final.log](/workspace/.firefly-environment/admin-typecheck-final.log)：根 `pnpm type-check` 与后台 `type-check` 均成功 |
 | 完整博客 `pnpm build` | 已执行，通过 | [blog-build-final.log](/workspace/.firefly-environment/blog-build-final.log)：42 个生成路由、15 篇公开文章、33 个 Pagefind 文件；保留资源后处理、字体处理及最终清单 |
@@ -23,6 +25,7 @@
 | 订阅与搜索 | 已执行，通过 | [smoke-migration.log](/workspace/.firefly-environment/smoke-migration.log)：生产预览 12 项通过，无页面运行错误；RSS / Atom 各 15 项，Pagefind 实际搜索与搜索输入可用，目录、OG 图与重复文章请求正常 |
 | 迁移字节复核 | 已执行，通过 | [migration-integrity-audit.json](/workspace/.firefly-environment/migration-integrity-audit.json)：原 14 条文件哈希完整一致；两篇仅增加 slug；头像与四条模板动态保持原字节 |
 | 安全浏览器验证 | 已执行，通过 | [browser-security-review.json](/workspace/.firefly-environment/browser-security-review.json)：6 项通过，覆盖模板署名、旧收款入口、基线核对、待审核头像零跟踪请求、评论默认关闭与匿名基线读取拒绝 |
+| 后台密码入口 | 已执行，通过 | [browser-entry.json](/workspace/.firefly-environment/browser-entry.json)：9 项浏览器检查通过；真实密码校验、旧会话补验、Cookie/注销、深色主题、320/390 px 布局及博客按钮；新增服务端单元与数据库测试计入 179 项 |
 | npm 依赖漏洞审计 | 已执行，通过 | [dependency-audit.json](/workspace/.firefly-environment/dependency-audit.json)：1829 依赖，0 critical/high/moderate/low/info；修复前 59 项记录保存在 `dependency-audit-before.json`；没有忽略公告 |
 | 外部服务与生产切换 | 未执行 | 未配置实际 OAuth/App、Neon、Blob、Turnstile、Resend 与 Vercel 生产服务；未切换域名 |
 
@@ -50,6 +53,7 @@
 | --- | --- | --- |
 | 两个 Vercel 项目 | 根博客 / `apps/admin` 独立构建；管理 Fluid compute；Workflow 入口与同源 SPA/API 路由 | 未执行，待平台配置 |
 | OAuth 与管理员 | 固定回调成功、数字 ID `285582250` 允许、其他账号拒绝、state 重用拒绝、Secure Cookie / CSRF 生效 | 未执行，待 OAuth 与固定 HTTPS 域名 |
+| 管理入口密码 | 生产 `ADMIN_ENTRY_PASSWORD` 已配置；错误拒绝、正确后再做 OAuth；接口与旧会话不能绕过，轮换密码后旧凭证失效 | 本地与受控 OAuth 通过，生产域名未执行 |
 | Neon | 三环境连接隔离，全部 001–004 迁移生效，Preview/Development 不接触生产数据 | 未执行，待 Marketplace 数据库 |
 | 基线导入 | 16 条管理记录、15 公开文章、原草稿/MDX/未知字段完整，重复导入不覆盖私有草稿 | 未执行真实远端导入，须配置 App 并确认可读取本次完整改动 |
 | 私有媒体 | 匿名上传令牌和读取拒绝；32 MiB 上限、类型/归属核验、真实 Blob 完成回调 | 未执行，待 private/public stores |

@@ -1,9 +1,9 @@
 type Operation = Record<string, unknown>;
 const jsonResponse = { description: "JSON result", content: { "application/json": { schema: { type: "object", additionalProperties: true } } } };
-const security = [{ session: [], csrf: [] }];
+const security = [{ session: [], entry: [], csrf: [] }];
 const paths: Record<string, Record<string, Operation>> = {};
 function route(method: string, path: string, tag: string, summary: string, publicAccess = false, fields?: Record<string, unknown>, required: string[] = []) {
-	const operation: Operation = { tags: [tag], summary, security: publicAccess ? [] : method === "get" ? [{ session: [] }] : security, responses: { "200": jsonResponse, "201": jsonResponse, "202": jsonResponse, "400": jsonResponse, "401": jsonResponse, "403": jsonResponse, "409": jsonResponse, "503": jsonResponse } };
+	const operation: Operation = { tags: [tag], summary, security: publicAccess ? [] : method === "get" ? [{ session: [], entry: [] }] : security, responses: { "200": jsonResponse, "201": jsonResponse, "202": jsonResponse, "400": jsonResponse, "401": jsonResponse, "403": jsonResponse, "409": jsonResponse, "429": jsonResponse, "503": jsonResponse } };
 	const parameters: Record<string, unknown>[] = [...path.matchAll(/\{([^}]+)\}/g)].map((match) => ({ name: match[1], in: "path", required: true, schema: { type: "string" } }));
 		if (path === "/api/public/comments" && method === "get") {
 			parameters.push({ name: "articleId", in: "query", required: true, schema: { type: "string" } });
@@ -17,8 +17,12 @@ function route(method: string, path: string, tag: string, summary: string, publi
 const string = { type: "string" }; const revision = { type: "integer", minimum: 0 };
 route("get", "/api/health", "System", "Runtime health (does not claim service readiness)", true);
 route("get", "/api/openapi.json", "System", "API specification", true);
+route("get", "/api/auth/entry", "Authentication", "Read entry verification status without revealing credentials", true);
+route("post", "/api/auth/entry", "Authentication", "Verify server-side password with same Origin and persistent rate limits", true, { password: { type: "string", minLength: 1, maxLength: 256, writeOnly: true } }, ["password"]);
 route("get", "/api/auth/github", "Authentication", "Start GitHub OAuth", true);
 route("get", "/api/auth/callback", "Authentication", "Fixed OAuth callback; verifies state and numeric user ID", true);
+paths["/api/auth/github"].get.security = [{ entry: [] }];
+paths["/api/auth/callback"].get.security = [{ entry: [] }];
 route("get", "/api/auth/session", "Authentication", "Current administrator and CSRF token");
 route("post", "/api/auth/logout", "Authentication", "Revoke current session");
 route("get", "/api/posts", "Content", "List private management records");
@@ -63,4 +67,4 @@ route("post", "/api/maintenance/restore", "Maintenance", "Validate in isolated d
 route("post", "/api/maintenance/check", "Maintenance", "Read deployment counts and theme release information");
 route("get", "/api/maintenance/cron", "Maintenance", "Authenticated daily checks and backup", true);
 paths["/api/maintenance/cron"].get.security = [{ cron: [] }];
-export const openApiDocument = { openapi: "3.1.0", info: { title: "Nocticur management API", version: "0.1.0" }, servers: [{ url: "https://admin.mourn.top" }], paths, components: { securitySchemes: { session: { type: "apiKey", in: "cookie", name: "__Host-admin-session" }, csrf: { type: "apiKey", in: "header", name: "x-csrf-token", description: "Required for writes together with same management Origin; GET requires session only" }, cron: { type: "http", scheme: "bearer" } } } };
+export const openApiDocument = { openapi: "3.1.0", info: { title: "Nocticur management API", version: "0.1.0" }, servers: [{ url: "https://admin.mourn.top" }], paths, components: { securitySchemes: { session: { type: "apiKey", in: "cookie", name: "__Host-admin-session" }, entry: { type: "apiKey", in: "cookie", name: "__Host-admin-entry", description: "Server-verified password credential required alongside the GitHub session, including for GET; password rotation invalidates it" }, csrf: { type: "apiKey", in: "header", name: "x-csrf-token", description: "Required for writes together with same management Origin and both authentication Cookies" }, cron: { type: "http", scheme: "bearer" } } } };

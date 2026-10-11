@@ -1,0 +1,69 @@
+import { createHmac, randomBytes, scryptSync } from "node:crypto";
+import { deleteCookie, setCookie } from "hono/cookie";
+import type { AdminApp } from "./types.js";
+import { getDatabase, getSiteId } from "./db.js";
+import { consumeLoginAllowance } from "./login-rate.js";
+import { ApiFailure, constantTimeEqual, managementOrigin, readJson } from "./security.js";
+
+export const ENTRY_COOKIE = "__Host-admin-entry";
+export const ENTRY_SECONDS = 12 * 60 * 60;
+const cookieOptions = { path: "/", secure: true, httpOnly: true, sameSite: "Lax" as const };
+let cached: { password: string; scope: string; key: Buffer } | undefined;
+
+function configuration() {
+	const password = process.env.ADMIN_ENTRY_PASSWORD;
+	if (!password || Array.from(password).length < 12 || Buffer.byteLength(password, "utf8") > 256 || !password.trim()) throw new ApiFailure(503, "ENTRY_CONFIGURATION_REQUIRED", "后台入口暂未启用，请联系站点管理员");
+	const scope = `firefly-admin-entry:v1:${getSiteId()}:${managementOrigin()}`;
+	if (!cached || cached.password !== password || cached.scope !== scope) {
+		// A slow KDF also protects the signing key against offline guessing of a captured Cookie.
+		cached = { password, scope, key: scryptSync(password, scope, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }) };
+	}
+	return cached;
+}
+
+function signature(payload: string, config: ReturnType<typeof configuration>): string {
+	return createHmac("sha256", config.key).update(`${config.scope}\0${payload}`).digest("base64url");
+}
+
+/** Called only after server-side password verification; no public route exposes this token. */
+export function issueEntryToken(now = Date.now()): string {
+	const config = configuration();
+	const payload = `v1.${Math.floor(now / 1000) + ENTRY_SECONDS}.${randomBytes(32).toString("base64url")}`;
+	return `${payload}.${signature(payload, config)}`;
+}
+
+export function entryVerified(request: Request, now = Date.now()): boolean {
+	const config = configuration();
+	const token = request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${ENTRY_COOKIE}=`))?.slice(ENTRY_COOKIE.length + 1);
+	if (!token || token.length > 160) return false;
+	const match = /^(v1\.(\d{10})\.[A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{43})$/.exec(token);
+	if (!match) return false;
+	const expiresAt = Number(match[2]);
+	const current = Math.floor(now / 1000);
+	return expiresAt > current && expiresAt <= current + ENTRY_SECONDS + 60 && constantTimeEqual(match[3], signature(match[1], config));
+}
+
+export function requireEntry(request: Request): void {
+	if (!entryVerified(request)) throw new ApiFailure(401, "ENTRY_PASSWORD_REQUIRED", "请先输入管理密码");
+}
+
+export function registerEntryRoutes(app: AdminApp) {
+	app.get("/api/auth/entry", (context) => {
+		context.header("Cache-Control", "no-store");
+		return context.json({ data: { verified: entryVerified(context.req.raw) } });
+	});
+	app.post("/api/auth/entry", async (context) => {
+		context.header("Cache-Control", "no-store");
+		const config = configuration();
+		if (context.req.header("Origin") !== managementOrigin() || context.req.header("Sec-Fetch-Site") === "cross-site") throw new ApiFailure(403, "ENTRY_ORIGIN_REJECTED", "请从管理页面提交密码");
+		const body = await readJson(context.req.raw, 1024);
+		if (typeof body.password !== "string" || !body.password || Buffer.byteLength(body.password, "utf8") > 256) throw new ApiFailure(400, "ENTRY_PASSWORD_INVALID", "请输入有效的管理密码");
+		await consumeLoginAllowance(getDatabase(), getSiteId(), context.req.raw, config.key.toString("hex"), "entry");
+		if (!constantTimeEqual(body.password, config.password)) {
+			deleteCookie(context, ENTRY_COOKIE, cookieOptions);
+			throw new ApiFailure(401, "ENTRY_PASSWORD_INCORRECT", "密码不正确，请重新输入");
+		}
+		setCookie(context, ENTRY_COOKIE, issueEntryToken(), { ...cookieOptions, maxAge: ENTRY_SECONDS });
+		return context.json({ data: { verified: true } });
+	});
+}

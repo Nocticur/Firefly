@@ -1,11 +1,12 @@
-import { createHmac, randomBytes } from "node:crypto";
-import { isIP } from "node:net";
+import { randomBytes } from "node:crypto";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { Context, MiddlewareHandler } from "hono";
 import type { AdminApp, AppEnv } from "./types.js";
 import type { AdminSession, AdminUser } from "../shared/contracts.js";
 import { getDatabase, getSiteId, type Database } from "./db.js";
 import { ApiFailure, constantTimeEqual, digest, managementOrigin, runtimeEnvironment, productionEnvironment } from "./security.js";
+import { ENTRY_COOKIE, registerEntryRoutes, requireEntry } from "./entry.js";
+import { consumeLoginAllowance } from "./login-rate.js";
 
 const SESSION_COOKIE = "__Host-admin-session";
 const OAUTH_COOKIE = "__Host-admin-oauth";
@@ -30,12 +31,13 @@ export async function issueSession(database: Database, siteId: string, user: Adm
 }
 
 export async function authenticateRequest(request: Request, csrfTokenOverride?: string): Promise<AdminSession> {
-	const configuredId = adminGithubId();
 	const rawCookie = request.headers.get("cookie") || "";
 	const encodedToken = rawCookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1);
 	let token: string | undefined;
 	try { token = encodedToken ? decodeURIComponent(encodedToken) : undefined; } catch { /* Invalid cookies are not authenticated. */ }
 	if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) throw new ApiFailure(401, "AUTHENTICATION_REQUIRED", "请先通过 GitHub 登录");
+	const configuredId = adminGithubId();
+	requireEntry(request);
 	const [row] = await getDatabase().query<SessionRow>("SELECT user_data,csrf_hash FROM sessions WHERE site_id=$1 AND token_hash=$2 AND expires_at > now()", [getSiteId(), digest(token)]);
 	if (!row || !constantTimeEqual(String(row.user_data.id), configuredId)) throw new ApiFailure(401, "SESSION_EXPIRED", "登录已失效，请重新登录");
 	const csrfToken = csrfForSession(token);
@@ -79,29 +81,9 @@ function requireOAuthStartOrigin(request: Request): void {
 	// while preserving navigations to the sign-in page and GitHub's callback.
 	if (request.headers.get("sec-fetch-site") === "cross-site" && (request.headers.get("sec-fetch-mode") !== "navigate" || request.headers.has("sec-fetch-dest") && request.headers.get("sec-fetch-dest") !== "document")) throw new ApiFailure(403, "OAUTH_ORIGIN_REQUIRED", "GitHub 登录须通过管理页面发起");
 }
-function oauthClientAddress(request: Request): string {
-	const forwarded = process.env.VERCEL === "1" ? request.headers.get("x-vercel-forwarded-for") : runtimeEnvironment() === "development" ? request.headers.get("x-forwarded-for") || "127.0.0.1" : null;
-	const address = forwarded?.split(",")[0]?.trim();
-	if (!address || !isIP(address)) throw new ApiFailure(503, "OAUTH_CLIENT_UNVERIFIED", "无法验证登录请求来源，请检查受信代理配置");
-	return address;
-}
-
 /** The existing persistent counters use a separate namespace from public interactions. */
 export async function consumeOAuthLoginAllowance(database: Database, siteId: string, request: Request, secret: string): Promise<void> {
-	const subject = `oauth:ip:${createHmac("sha256", secret).update(`${siteId}\0${oauthClientAddress(request)}`).digest("hex")}`;
-	const allowed = await database.transaction(async (tx) => {
-		await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`${siteId}:oauth-login-rate`]);
-		await tx.query("DELETE FROM oauth_states WHERE site_id=$1 AND expires_at<=now()", [siteId]);
-		await tx.query("DELETE FROM sessions WHERE site_id=$1 AND expires_at<=now()", [siteId]);
-		await tx.query("DELETE FROM interaction_rate_limits WHERE site_id=$1 AND subject LIKE 'oauth:%' AND window_start<now()-interval '20 minutes'", [siteId]);
-		const counters = await tx.query<Record<string, unknown> & { subject: string; hits: number }>("SELECT subject,hits FROM interaction_rate_limits WHERE site_id=$1 AND subject IN ($2,'oauth:global') AND window_start=to_timestamp(floor(extract(epoch FROM now())/600)*600)", [siteId, subject]);
-		if (counters.some((row) => Number(row.hits) >= (row.subject === "oauth:global" ? 100 : 5))) return false;
-		// Check the global quota before allocating an IP row, so rotating client
-		// addresses cannot create unlimited rows. Denied IPs do not consume it.
-		await tx.query("INSERT INTO interaction_rate_limits(site_id,subject,window_start,hits) VALUES($1,$2,to_timestamp(floor(extract(epoch FROM now())/600)*600),1),($1,'oauth:global',to_timestamp(floor(extract(epoch FROM now())/600)*600),1) ON CONFLICT(site_id,subject,window_start) DO UPDATE SET hits=interaction_rate_limits.hits+1", [siteId, subject]);
-		return true;
-	});
-	if (!allowed) throw new ApiFailure(429, "OAUTH_RATE_LIMITED", "登录请求过于频繁，请稍后再试");
+	await consumeLoginAllowance(database, siteId, request, secret, "oauth");
 }
 async function githubRequest(url: string, init: RequestInit): Promise<Response> {
 	try { return await fetch(url, { ...init, signal: AbortSignal.timeout(15_000) }); }
@@ -109,9 +91,11 @@ async function githubRequest(url: string, init: RequestInit): Promise<Response> 
 }
 
 export function registerAuthRoutes(app: AdminApp) {
+	registerEntryRoutes(app);
 	app.get("/api/auth/github", async (context) => {
 		requireCanonicalOAuthRequest(context);
 		requireOAuthStartOrigin(context.req.raw);
+		requireEntry(context.req.raw);
 		const { clientId, clientSecret } = oauthConfiguration();
 		await consumeOAuthLoginAllowance(getDatabase(), getSiteId(), context.req.raw, clientSecret);
 		const state = randomBytes(32).toString("base64url");
@@ -128,6 +112,7 @@ export function registerAuthRoutes(app: AdminApp) {
 	});
 	app.get("/api/auth/callback", async (context) => {
 		requireCanonicalOAuthRequest(context);
+		requireEntry(context.req.raw);
 		const { clientId, clientSecret } = oauthConfiguration();
 		const state = context.req.query("state");
 		const code = context.req.query("code");
@@ -157,6 +142,7 @@ export function registerAuthRoutes(app: AdminApp) {
 		const token = getCookie(context, SESSION_COOKIE);
 		if (token) await getDatabase().query("DELETE FROM sessions WHERE site_id=$1 AND token_hash=$2", [getSiteId(), digest(token)]);
 		deleteCookie(context, SESSION_COOKIE, cookieOptions(0));
+		deleteCookie(context, ENTRY_COOKIE, cookieOptions(0));
 		return context.json({ data: { loggedOut: true } });
 	});
 }

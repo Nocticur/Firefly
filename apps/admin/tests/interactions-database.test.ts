@@ -6,6 +6,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../server/types.js";
 import { createDatabase, getDatabase, getSiteId, type Database } from "../server/db.js";
 import { issueSession } from "../server/auth.js";
+import { entryCookie } from "./entry-fixture.js";
 import { ApiFailure } from "../server/security.js";
 import { publicContentDigest } from "../server/release-format.js";
 import { markFriendsPublished, registerInteractionRoutes } from "../server/interactions.js";
@@ -49,7 +50,7 @@ test("real PostgreSQL persists public interactions and enforces authenticated mo
 	}
 	const app = makeApp();
 	const session = await issueSession(db, site, { id: "285582250", login: "Nocticur", name: "Nocticur", avatarUrl: "https://github.com/Nocticur.png" });
-	const cookie = `__Host-admin-session=${session.token}`;
+	const cookie = `__Host-admin-session=${session.token}; ${entryCookie()}`;
 	const administrativeHeaders = { cookie, Origin: "http://localhost:3000", "Content-Type": "application/json", "x-csrf-token": session.csrfToken };
 	const publicHeaders = (ip = "192.0.2.1") => ({ Origin: publicOrigin, "Content-Type": "application/json", "x-forwarded-for": ip });
 	const postComment = (body: Row, ip = "192.0.2.1", target = app) => target.request(`${publicOrigin}/api/public/comments`, { method: "POST", headers: publicHeaders(ip), body: JSON.stringify({ articleId: article, name: "访客", body: "普通文本", turnstileToken: "verified-in-isolated-provider", ...body }) });

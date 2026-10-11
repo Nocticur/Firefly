@@ -55,3 +55,5 @@ jobs:
         with:
           name: validated-static-blog
           path: dist
+          retention-days: 1
+          compression-level: 9
