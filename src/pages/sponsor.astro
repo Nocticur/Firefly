@@ -22,9 +22,10 @@ const isCommentEnabled =
 	sponsorConfig.showComment !== false;
 
 const title = sponsorConfig.title || i18n(I18nKey.sponsorTitle);
-const description =
-	sponsorConfig.description || i18n(I18nKey.sponsorDescription);
 const enabledMethods = sponsorConfig.methods.filter((method) => method.enabled);
+const description = enabledMethods.length
+	? sponsorConfig.description || i18n(I18nKey.sponsorDescription)
+	: "本站暂未开放打赏。";
 const sponsors = sponsorConfig.sponsors || [];
 const showSponsorsList = sponsorConfig.showSponsorsList !== false;
 

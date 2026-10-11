@@ -18,6 +18,7 @@ interface DynamicEntry {
 	images?: Array<{ alt: string; src: string; title?: string }>;
 	searchText?: string;
 	pinned?: boolean;
+	example?: boolean;
 }
 
 interface MemosConfig {
@@ -105,13 +106,14 @@ function formatDate(timestamp: number): string {
 		{#each entries as entry (entry.id)}
 			{@const text = getPlainText(entry.html)}
 			{@const hasImage = (entry.images?.length ?? 0) > 0}
+			{@const example = entry.example === true && !memos?.enable && !apiUrl.startsWith("http")}
 			<a
 				href={url(`/dynamic/#dynamic-${entry.id}`)}
 				class="group flex min-w-0 min-h-16 items-center gap-3 rounded-lg p-2
 					text-neutral-700/75 dark:text-neutral-300/75
 					hover:bg-(--btn-plain-bg-hover) hover:text-(--primary)
 					active:bg-(--btn-plain-bg-active) transition-colors duration-150"
-				aria-label={`${i18n(I18nKey.dynamic)}: ${text}`}
+				aria-label={`${example ? "主题示例动态" : i18n(I18nKey.dynamic)}: ${text}`}
 			>
 				<div class="min-w-0 flex-1">
 					<div class="mb-1 flex items-center gap-1 text-xs leading-4 text-(--primary)">
@@ -137,6 +139,9 @@ function formatDate(timestamp: number): string {
 							</span>
 						{/if}
 					</div>
+					{#if example}
+						<span data-dynamic-sidebar-example class="mb-1 block text-xs">主题示例，非个人动态</span>
+					{/if}
 					<p class="m-0 line-clamp-3 text-sm leading-[1.35rem]">
 						{text}
 					</p>
