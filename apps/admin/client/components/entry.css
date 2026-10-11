@@ -58,12 +58,6 @@
 .entry-private { display: flex; align-items: center; gap: 7px; margin-bottom: 14px; font-size: 9px; letter-spacing: 2px; color: var(--entry-accent); }
 .entry-content h1 { font-size: 29px; font-weight: 600; letter-spacing: -.7px; margin: 0 0 11px; color: var(--entry-text); }
 .entry-description { min-height: 44px; margin: 0 0 24px; color: var(--entry-muted); font-size: 12px; line-height: 1.9; }
-.entry-steps { display: flex; align-items: center; gap: 12px; padding: 0; margin: 0 0 29px; list-style: none; }
-.entry-steps li { display: flex; align-items: center; gap: 7px; color: var(--entry-muted); font-size: 10px; white-space: nowrap; }
-.entry-steps li > span { display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--entry-border); border-radius: 50%; font-size: 10px; }
-.entry-steps li.current, .entry-steps li.complete { color: var(--entry-accent); }
-.entry-steps li.current > span, .entry-steps li.complete > span { background: var(--entry-accent); color: var(--entry-bg); border-color: var(--entry-accent); }
-.entry-steps .entry-step-line { flex: 1; height: 1px; background: var(--entry-border); }
 .entry-form-area { min-height: 184px; }
 .entry-form-area .loading { min-height: 180px; color: var(--entry-muted); }
 .entry-label { display: block; margin-bottom: 10px; color: var(--entry-text); font-size: 12px; font-weight: 500; }
@@ -82,7 +76,6 @@
 .entry-primary:disabled { opacity: .5; }
 .entry-error { margin: 0 0 15px; padding: 11px 13px; border: 1px solid #ce968b55; border-radius: 10px; background: #b5695510; color: #ad594b; font-size: 12px; overflow-wrap: anywhere; }
 [data-entry-theme="dark"] .entry-error { color: #efafa5; }
-.entry-unlocked { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 4px 0 26px; padding: 12px; border: 1px solid var(--entry-border); border-radius: 12px; color: var(--entry-accent); font-size: 12px; }
 .entry-retry { display: block; min-height: 44px; margin: 9px auto 0; border: 0; background: none; color: var(--entry-accent); font-size: 12px; }
 .entry-security { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 23px 0 0; color: var(--entry-muted); font-size: 10px; }
 .entry-footer { margin-top: 25px; color: var(--entry-muted); font-size: 10px; text-align: center; }
@@ -106,7 +99,6 @@
 	.entry-content { padding: 29px 27px 30px; }
 	.entry-content h1 { font-size: 25px; }
 	.entry-description { min-height: 0; margin-bottom: 21px; font-size: 11px; }
-	.entry-steps { margin-bottom: 25px; }
 	.entry-password-field input:not([type="checkbox"]) { font-size: 16px; }
 	.entry-security { margin-top: 20px; }
 	.entry-footer { font-size: 9px; margin-top: 22px; }

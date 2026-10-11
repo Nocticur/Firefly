@@ -24,7 +24,6 @@
 | --- | --- | --- |
 | `APP_ENV` | 各环境必填 | Production 填 `production`，Preview 填 `preview`，本地填 `development`；与平台 `VERCEL_ENV` 一致 |
 | `GITHUB_REPOSITORY` | 固定值 | `Nocticur/Firefly`，用于站点/环境数据命名空间；发布目标固定为该仓库 `master` |
-| `ADMIN_GITHUB_USER_ID` | 登录必填 | `285582250`，你的 GitHub **数字用户 ID**，不是用户名或 App ID |
 | `ADMIN_ENTRY_PASSWORD` | 登录必填，秘密 | 你自行设置的后台入口密码，至少 12 个字符、UTF-8 最多 256 字节；建议密码管理器生成 16 位以上随机密码。仅在**管理项目**填写，不加 `PUBLIC_` / `VITE_` 前缀，各环境使用不同值 |
 | `ADMIN_ORIGIN` | Production 固定值 | `https://admin.mourn.top`，后台 HTTPS origin，不含末尾 `/` |
 | `PUBLIC_SITE_ORIGIN` | Production 固定值 | `https://blog.mourn.top`，博客 HTTPS origin，不含末尾 `/` |
@@ -33,23 +32,21 @@
 
 数据库连接示意：`postgresql://<用户>:<密码>@<Neon主机>/<数据库名>?sslmode=require`，使用 Neon 提供的值。`/api/health` 正常不证明数据库已连接或迁移完成。
 
-博客作者卡片和手机导航菜单的“后台管理”按钮指向 `https://admin.mourn.top/`。先输入 `ADMIN_ENTRY_PASSWORD`，通过后继续 GitHub 身份验证；密码不能代替管理员账号验证。密码未配置、过短或超长时入口关闭。校验通过的 HttpOnly / Secure Cookie 有效 12 小时；旧 GitHub 会话也必须补做密码校验。修改密码并重新部署后旧入口凭证失效；退出登录同时清除两种 Cookie。密码不写入数据库、Git 或浏览器存储。
+博客作者卡片和手机导航菜单的“后台管理”按钮指向 `https://admin.mourn.top/`。只需输入 `ADMIN_ENTRY_PASSWORD`，正确后直接进入后台，无需用户名或第三方账号。密码未配置、过短或超长时入口关闭。登录自动建立有效 12 小时的数据库会话与 HttpOnly / Secure Cookie；旧 GitHub 登录会话不再有效，须重新输入密码。修改密码并重新部署后旧入口凭证失效；退出登录撤销会话并清除两种 Cookie。密码不写入数据库、Git 或浏览器存储。
 
 Vercel 保存新变量后，重新部署**管理项目**，现有部署不会自动更新密码。保持 Hobby 免费套餐；免费服务选择及额度约束见 [免费部署说明](./free-deployment.md)。
 
-## 管理项目：GitHub
+## 管理项目：GitHub 仓库操作
 
-OAuth App 用于登录；GitHub App 用于读取仓库与提交内容，分别创建与填写。
+GitHub App 用于导入、核查仓库与发布文章；密码登录不调用 GitHub，不需要创建 OAuth App。旧的 `ADMIN_GITHUB_USER_ID`、`GITHUB_OAUTH_CLIENT_ID`、`GITHUB_OAUTH_CLIENT_SECRET` 已不读取，可以从管理项目移除。
 
 | 变量 | 条件 | 填什么 / 从哪里取得 |
 | --- | --- | --- |
-| `GITHUB_OAUTH_CLIENT_ID` | 登录必填 | GitHub → Settings → Developer settings → OAuth Apps 的 Client ID |
-| `GITHUB_OAUTH_CLIENT_SECRET` | 登录必填，秘密 | 同一个 OAuth App 的 Client secret |
 | `GITHUB_APP_ID` | 导入/核查/发布需要 | GitHub App 数字 App ID，不是 OAuth Client ID |
 | `GITHUB_INSTALLATION_ID` | 同上 | App 安装到目标仓库后的数字 installation ID，可从安装设置页 URL 取得 |
 | `GITHUB_APP_PRIVATE_KEY` | 同上，秘密 | GitHub App 的 PEM 私钥；填写原始多行 PEM 或带字面量 `\n` 的 PEM，不是文件路径 |
 
-OAuth Homepage URL 为 `https://admin.mourn.top`，Authorization callback URL 精确为 `https://admin.mourn.top/api/auth/callback`。GitHub App 只安装到 `Nocticur/Firefly`，Contents: read/write、Metadata: read。不要以个人 PAT 代替后台发布身份。本地/临时 Preview 域名不满足固定 OAuth 回调，不要复制生产会话测试登录。
+GitHub App 只安装到 `Nocticur/Firefly`，Contents: read/write、Metadata: read。不要以个人 PAT 代替后台发布身份。Preview 与 Development 使用隔离密码、数据库和管理 origin，不要复制生产 Cookie 或会话。
 
 ## 管理项目：Vercel 与 Blob
 
@@ -96,7 +93,7 @@ Turnstile action 分别为 `comments` 和 `friend_request`；后台核验 action
 | `ADMIN_DEV_PRIVATE_BLOB_TOKEN` / `ADMIN_DEV_PUBLIC_BLOB_TOKEN` | Development | 开发专属 private/public stores |
 | `ADMIN_TEST_DATABASE_URL` | 测试 | 专用测试实例；维护测试角色可创建/删除临时测试库，不得使用生产实例 |
 
-互动联调还需独立 Turnstile 小组件和摘要密钥。当前博客 Preview 转发到生产后台，只作静态审阅；可写隔离联调还需独立 API 转发和测试登录方案，仅填 Preview origins 不够。
+管理 Preview 可用隔离密码与数据库直接登录，必须先配置 `APP_ENV=preview` 和 `ADMIN_PREVIEW_ORIGIN`。互动联调还需独立 Turnstile 小组件和摘要密钥。当前博客 Preview 转发到生产后台，只作静态审阅；可写隔离联调还需独立 API 转发，仅填 Preview origins 不够。
 
 ## 无需手动填写
 

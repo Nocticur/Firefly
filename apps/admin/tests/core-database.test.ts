@@ -20,7 +20,6 @@ test("real PostgreSQL protects revisions, history, sessions, isolation and initi
 	process.env.APP_ENV = "development";
 	delete process.env.VERCEL_ENV;
 	process.env.ADMIN_DEVELOPMENT_DATABASE_URL = databaseUrl;
-	process.env.ADMIN_GITHUB_USER_ID = "285582250";
 	process.env.ADMIN_DEV_ORIGIN = "http://localhost:3000";
 	process.env.GITHUB_REPOSITORY = `tests/core-${randomUUID()}`;
 	const database = getDatabase();
@@ -53,13 +52,13 @@ test("real PostgreSQL protects revisions, history, sessions, isolation and initi
 			try { assert.equal((await getPost(reopened, siteId, created.id)).source, current.source); } finally { await reopened.close(); }
 		});
 
-		const session = await issueSession(database, siteId, { id: process.env.ADMIN_GITHUB_USER_ID!, login: "Nocticur", name: "Nocticur", avatarUrl: "https://github.com/Nocticur.png" });
+		const session = await issueSession(database, siteId);
 		const app = new Hono<AppEnv>();
 		app.onError((error, context) => error instanceof ApiFailure ? error.getResponse() : context.json({ error: { code: "INTERNAL", message: "test error" } }, 500));
 		registerAuthRoutes(app); registerContentRoutes(app);
 		const cookie = `__Host-admin-session=${session.token}; ${entryCookie()}`;
 		const writeHeaders = { cookie, Origin: "http://localhost:3000", "Content-Type": "application/json", "x-csrf-token": session.csrfToken };
-		await t.test("authentication fails closed, binds numeric ID, checks origin/CSRF and returns recoverable CSRF", async () => {
+		await t.test("authentication fails closed, checks password proof and origin/CSRF and returns recoverable CSRF", async () => {
 			assert.equal((await app.request("http://localhost:3000/api/posts")).status, 401);
 			const current = await app.request("http://localhost:3000/api/auth/session", { headers: { cookie } });
 			assert.equal(current.status, 200);
@@ -68,10 +67,10 @@ test("real PostgreSQL protects revisions, history, sessions, isolation and initi
 			assert.equal(body.data.productionPublish, false);
 			assert.equal((await app.request("http://localhost:3000/api/posts", { method: "POST", headers: { cookie, Origin: "http://localhost:3000", "Content-Type": "application/json" }, body: JSON.stringify({ source, slug: "private" }) })).status, 403);
 			assert.equal((await app.request("http://localhost:3000/api/posts", { method: "POST", headers: { ...writeHeaders, Origin: "https://evil.example" }, body: JSON.stringify({ source, slug: "private" }) })).status, 403);
-			await assert.rejects(() => issueSession(database, siteId, { id: "1", login: "Nocticur", name: "impersonated", avatarUrl: "" }), (error: unknown) => error instanceof ApiFailure && error.status === 403);
-			delete process.env.ADMIN_GITHUB_USER_ID;
+			const configuredPassword = process.env.ADMIN_ENTRY_PASSWORD;
+			delete process.env.ADMIN_ENTRY_PASSWORD;
 			assert.equal((await app.request("http://localhost:3000/api/posts", { headers: { cookie } })).status, 503);
-			process.env.ADMIN_GITHUB_USER_ID = "285582250";
+			process.env.ADMIN_ENTRY_PASSWORD = configuredPassword;
 			process.env.APP_ENV = "preview";
 			process.env.ADMIN_PREVIEW_DATABASE_URL = databaseUrl;
 			process.env.ADMIN_PREVIEW_ORIGIN = "https://preview.example";

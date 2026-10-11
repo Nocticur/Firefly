@@ -1,9 +1,10 @@
 import { createHmac, randomBytes, scryptSync } from "node:crypto";
-import { deleteCookie, setCookie } from "hono/cookie";
+import { getCookie, setCookie } from "hono/cookie";
 import type { AdminApp } from "./types.js";
 import { getDatabase, getSiteId } from "./db.js";
 import { consumeLoginAllowance } from "./login-rate.js";
 import { ApiFailure, constantTimeEqual, managementOrigin, readJson } from "./security.js";
+import { issueSession, SESSION_COOKIE, SESSION_SECONDS } from "./session.js";
 
 export const ENTRY_COOKIE = "__Host-admin-entry";
 export const ENTRY_SECONDS = 12 * 60 * 60;
@@ -60,10 +61,12 @@ export function registerEntryRoutes(app: AdminApp) {
 		if (typeof body.password !== "string" || !body.password || Buffer.byteLength(body.password, "utf8") > 256) throw new ApiFailure(400, "ENTRY_PASSWORD_INVALID", "请输入有效的管理密码");
 		await consumeLoginAllowance(getDatabase(), getSiteId(), context.req.raw, config.key.toString("hex"), "entry");
 		if (!constantTimeEqual(body.password, config.password)) {
-			deleteCookie(context, ENTRY_COOKIE, cookieOptions);
 			throw new ApiFailure(401, "ENTRY_PASSWORD_INCORRECT", "密码不正确，请重新输入");
 		}
-		setCookie(context, ENTRY_COOKIE, issueEntryToken(), { ...cookieOptions, maxAge: ENTRY_SECONDS });
+		const entryToken = issueEntryToken();
+		const session = await issueSession(getDatabase(), getSiteId(), getCookie(context, SESSION_COOKIE));
+		setCookie(context, ENTRY_COOKIE, entryToken, { ...cookieOptions, maxAge: ENTRY_SECONDS });
+		setCookie(context, SESSION_COOKIE, session.token, { ...cookieOptions, maxAge: SESSION_SECONDS });
 		return context.json({ data: { verified: true } });
 	});
 }

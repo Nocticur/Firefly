@@ -21,7 +21,6 @@ test("real PostgreSQL persists public interactions and enforces authenticated mo
 	delete process.env.VERCEL_ENV;
 	delete process.env.VERCEL;
 	process.env.ADMIN_DEVELOPMENT_DATABASE_URL = databaseUrl;
-	process.env.ADMIN_GITHUB_USER_ID = "285582250";
 	process.env.ADMIN_DEV_ORIGIN = "http://localhost:3000";
 	process.env.PUBLIC_DEV_ORIGIN = publicOrigin;
 	process.env.TURNSTILE_SECRET_KEY = "isolated-test-secret";
@@ -49,7 +48,7 @@ test("real PostgreSQL persists public interactions and enforces authenticated mo
 		const app = new Hono<AppEnv>(); app.onError((error, c) => error instanceof ApiFailure ? error.getResponse() : c.json({ error: { code: "INTERNAL_TEST_FAILURE", message: error.message } }, 500)); registerInteractionRoutes(app, { db: database, site, fetcher, dispatchMail }); return app;
 	}
 	const app = makeApp();
-	const session = await issueSession(db, site, { id: "285582250", login: "Nocticur", name: "Nocticur", avatarUrl: "https://github.com/Nocticur.png" });
+	const session = await issueSession(db, site);
 	const cookie = `__Host-admin-session=${session.token}; ${entryCookie()}`;
 	const administrativeHeaders = { cookie, Origin: "http://localhost:3000", "Content-Type": "application/json", "x-csrf-token": session.csrfToken };
 	const publicHeaders = (ip = "192.0.2.1") => ({ Origin: publicOrigin, "Content-Type": "application/json", "x-forwarded-for": ip });

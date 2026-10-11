@@ -153,7 +153,7 @@ test("media import rejects disallowed URLs before DNS and rejects any private DN
 });
 
 test("media routes deny anonymous and Blob-token requests before intent creation or private reads", async () => {
-	await environment({ ...testTokens, ADMIN_GITHUB_USER_ID: "12345", ADMIN_DEVELOPMENT_DATABASE_URL: undefined, ADMIN_DATABASE_URL: undefined }, async () => {
+	await environment({ ...testTokens, ADMIN_DEVELOPMENT_DATABASE_URL: undefined, ADMIN_DATABASE_URL: undefined }, async () => {
 		const app = new Hono<AppEnv>();
 		app.onError((error, context) => error instanceof ApiFailure ? error.getResponse() : context.json({ error: { code: "UNEXPECTED" } }, 500));
 		registerMediaRoutes(app);
@@ -246,10 +246,10 @@ test("snapshot publication rejects invalid frozen records and unsafe content bef
 
 const databaseUrl = process.env.ADMIN_TEST_DATABASE_URL;
 test("authenticated media validation rejects inherited MIME names and HTTPS redirects with a pinned address", { skip: !databaseUrl }, async (t) => {
-	await environment({ ...testTokens, ADMIN_DEVELOPMENT_DATABASE_URL: databaseUrl, ADMIN_GITHUB_USER_ID: "12345", ADMIN_DEV_ORIGIN: "http://localhost:3000", GITHUB_REPOSITORY: `tests/media-auth-${randomUUID()}`, MEDIA_IMPORT_HOSTS: "allowed.invalid" }, async () => {
+	await environment({ ...testTokens, ADMIN_DEVELOPMENT_DATABASE_URL: databaseUrl, ADMIN_DEV_ORIGIN: "http://localhost:3000", GITHUB_REPOSITORY: `tests/media-auth-${randomUUID()}`, MEDIA_IMPORT_HOSTS: "allowed.invalid" }, async () => {
 		const db = getDatabase(); const selectedSite = getSiteId();
 		try {
-			const session = await issueSession(db, selectedSite, { id: "12345", login: "test-admin", name: "Test administrator", avatarUrl: "" });
+			const session = await issueSession(db, selectedSite);
 			const headers = { Cookie: `__Host-admin-session=${session.token}; ${entryCookie()}`, Origin: "http://localhost:3000", "Content-Type": "application/json", "x-csrf-token": session.csrfToken };
 			const app = new Hono<AppEnv>();
 			app.onError((error, context) => error instanceof ApiFailure ? error.getResponse() : context.json({ error: { code: "UNEXPECTED" } }, 500));

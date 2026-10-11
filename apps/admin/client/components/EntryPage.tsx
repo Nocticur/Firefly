@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Check, Eye, EyeOff, Github, KeyRound, LockKeyhole, Moon, ShieldCheck, Sparkles, Sun } from "lucide-react";
+import { ArrowLeft, ArrowRight, Eye, EyeOff, KeyRound, LockKeyhole, Moon, ShieldCheck, Sparkles, Sun } from "lucide-react";
 import avatar from "../assets/nocticur-avatar.webp";
 import { message, request, write } from "../lib/api";
 import { Loading } from "./Common";
@@ -8,7 +8,6 @@ import "./entry.css";
 type Props = { loading: boolean; serviceError: string; onRetry: () => Promise<void>; onUnlocked: () => Promise<void> };
 
 export function EntryPage({ loading, serviceError, onRetry, onUnlocked }: Props) {
-	const [verified, setVerified] = useState(false);
 	const [checking, setChecking] = useState(true);
 	const [password, setPassword] = useState("");
 	const [visible, setVisible] = useState(false);
@@ -22,8 +21,8 @@ export function EntryPage({ loading, serviceError, onRetry, onUnlocked }: Props)
 	async function checkEntry() {
 		setChecking(true); setError("");
 		try {
-			const result = await request<{ verified: boolean }>("/auth/entry");
-			setVerified(result.data.verified); setAvailable(true);
+			await request<{ verified: boolean }>("/auth/entry");
+			setAvailable(true);
 		} catch (error) { setError(message(error)); setAvailable(false); }
 		finally { setChecking(false); }
 	}
@@ -36,7 +35,6 @@ export function EntryPage({ loading, serviceError, onRetry, onUnlocked }: Props)
 		setPassword(""); setVisible(false);
 		try {
 			await write("/auth/entry", { password: submitted });
-			setVerified(true);
 			await onUnlocked();
 		} catch (error) { setError(message(error)); input.current?.focus(); }
 		finally { setBusy(false); }
@@ -62,19 +60,17 @@ export function EntryPage({ loading, serviceError, onRetry, onUnlocked }: Props)
 			</div>
 			<div className="entry-content">
 				<div className="entry-private"><LockKeyhole size={13} /> PRIVATE WORKSPACE</div>
-				<h1 id="entry-title">{verified ? "欢迎回到夜幕" : "后台管理"}</h1>
-				<p className="entry-description">{verified ? "密码已验证。再确认 GitHub 身份，即可进入你的创作空间。" : "输入管理密码，继续书写属于你的故事。"}</p>
-				<ol className="entry-steps" aria-label="登录步骤"><li className={verified ? "complete" : "current"} aria-current={!verified ? "step" : undefined}><span>{verified ? <Check size={12} /> : "1"}</span>管理密码</li><li aria-hidden="true" className="entry-step-line" /><li className={verified ? "current" : ""} aria-current={verified ? "step" : undefined}><span>2</span>GitHub 验证</li></ol>
+				<h1 id="entry-title">后台管理</h1>
+				<p className="entry-description">输入管理密码，回到属于你的创作空间。</p>
 				<div className="entry-form-area" aria-busy={pending || busy}>
 					{pending ? <Loading /> : <>
 						{displayedError && <div className="entry-error" role="alert" id="entry-error">{displayedError}</div>}
-						{available && !verified && <form onSubmit={(event) => void submit(event)}>
+						{available && <form onSubmit={(event) => void submit(event)}>
 							<label className="entry-label" htmlFor="entry-password">管理密码</label>
 							<div className="entry-password-field"><KeyRound size={18} aria-hidden="true" /><input ref={input} id="entry-password" name="password" type={visible ? "text" : "password"} value={password} onChange={(event) => { setPassword(event.target.value); if (error) setError(""); }} onKeyUp={(event) => setCapsLock(event.getModifierState("CapsLock"))} onBlur={() => setCapsLock(false)} placeholder="请输入管理密码" autoComplete="current-password" autoCapitalize="none" spellCheck={false} required maxLength={256} disabled={busy} aria-invalid={Boolean(error)} aria-describedby={error ? "entry-error" : "entry-password-help"} /><button type="button" className="entry-reveal" onClick={() => setVisible(!visible)} aria-label={visible ? "隐藏密码" : "显示密码"} aria-pressed={visible} disabled={busy}>{visible ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
-							<p className="entry-password-help" id="entry-password-help">{capsLock ? "大写锁定已开启" : "验证通过后，继续确认管理员身份。"}</p>
-							<button className="entry-primary" type="submit" disabled={busy || !password}>{busy ? "正在验证…" : "验证密码"}<ArrowRight size={18} /></button>
+							<p className="entry-password-help" id="entry-password-help">{capsLock ? "大写锁定已开启" : "验证通过后直接进入后台。"}</p>
+							<button className="entry-primary" type="submit" disabled={busy || !password}>{busy ? "正在登录…" : "进入后台"}<ArrowRight size={18} /></button>
 						</form>}
-						{available && verified && <div className="entry-verified"><p className="entry-unlocked"><ShieldCheck size={17} />管理密码已通过验证</p><a className="entry-primary" href="/api/auth/github"><Github size={19} />使用 GitHub 验证身份<ArrowRight size={17} /></a></div>}
 						{(!available || serviceError) && <button className="entry-retry" type="button" onClick={() => void retry()}>重新检查服务</button>}
 					</>}
 				</div>

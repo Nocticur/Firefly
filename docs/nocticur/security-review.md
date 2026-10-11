@@ -4,6 +4,8 @@
 
 结论：**约定的源码与内容迁移完整；复审发现的问题已修复并加入验证。真实生产配置、域名切换和外部服务闭环尚未验收，不能保证“零风险”或把本地通过当作正式上线。**
 
+本报告的修复清单与压缩包记录当时的安全复审快照。后续后台登录已按用户要求改为只验证环境变量中的密码；最新认证方式、截图和回归证据见 [密码入口验收](./admin-entry-review.md)。
+
 ## 迁移证据
 
 - 原 Firefly 的 14 条文章记录均与 `content-baseline.json` 的完整文件 SHA256 一致，包含草稿、MDX、未知 Front-matter 和正文；没有只比较标题或数量。
@@ -46,10 +48,10 @@ CI 的 `actions/upload-artifact` 改为从官方仓库实际查询的 v4 提交 
 
 ## 尚需真实验收的边界
 
-1. GitHub OAuth/App、Vercel 项目与生产别名、Fluid compute/Workflow 重启、Blob 实际访问属性/完成回调、Turnstile、Neon 与 Resend 尚未真实接入。填变量后按 [deployment.md](./deployment.md) 和 [acceptance.md](./acceptance.md) 验收；不能据此保证线上邮件、备份、恢复或域名切换成功。
+1. GitHub App、Vercel 项目与生产别名、Fluid compute/Workflow 重启、Blob 实际访问属性/完成回调、Turnstile、Neon 与 Resend 尚未真实接入。填变量后按 [deployment.md](./deployment.md) 和 [acceptance.md](./acceptance.md) 验收；不能据此保证线上邮件、备份、恢复或域名切换成功。后续登录已按用户要求改为只验证管理密码，最新实现和回归见 [admin-entry-review.md](./admin-entry-review.md)；不再需要 OAuth 配置。
 2. 图片目前核验格式签名、类型、大小及摘要，并保守限制静态 SVG；未做完整解码、像素总量或病毒扫描。上传/导入仅管理员可用，应使用可信原图。Blob 历史对象须保留；数据库备份只有媒体清单，不包含对象字节。
 3. 私有快照、历史和备份冻结数据会随使用增长，尚无自动删除保留策略。需监测 Neon/Blob 用量；清理不能破坏未知任务、通知幂等账本或历史媒体引用。
 4. 外部管理内容变化需要人工审阅合并；新“核对代码更新”不会自动覆盖冲突。Preview 默认仅静态审阅，完整隔离联调仍需要单独 API 转发和测试登录方案。
-5. Markdown/MDX 属于管理员受信源码，可参与静态构建；公开访客只能提交纯文本互动。原主题密码文章在 feed 中使用保护提示，但 Git 中仍保存原 Markdown 源码，不能把静态密码显示当作私有草稿的保密机制。管理员 GitHub 身份、App 私钥、数据库与平台写权限泄露不在访客输入隔离的保证范围内。
+5. Markdown/MDX 属于管理员受信源码，可参与静态构建；公开访客只能提交纯文本互动。原主题密码文章在 feed 中使用保护提示，但 Git 中仍保存原 Markdown 源码，不能把静态密码显示当作私有草稿的保密机制。管理密码、App 私钥、数据库与平台写权限泄露不在访客输入隔离的保证范围内。
 
 没有在本次审查中关闭所有主题功能、删除原文章、强推历史或切换生产域名。变量逐项来源见 [environment-variables.md](./environment-variables.md)，秘密值仅在平台安全设置中填写。

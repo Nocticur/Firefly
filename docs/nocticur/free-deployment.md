@@ -1,6 +1,6 @@
 # Vercel 免费部署
 
-用户要求整个后台不产生服务费用。博客与管理后台均部署到个人 Vercel **Hobby** 项目；不升级 Pro、不购买付费附加项，也不调用任何套餐升级或购买 API。代码中的密码校验、React 界面、编辑器和 GitHub 登录没有付费授权依赖；本次新增入口没有新增软件依赖。
+用户要求整个后台不产生服务费用。博客与管理后台均部署到个人 Vercel **Hobby** 项目；不升级 Pro、不购买付费附加项，也不调用任何套餐升级或购买 API。代码中的密码校验、React 界面和编辑器没有付费授权依赖；本次新增入口没有新增软件依赖。
 
 ## 服务选择
 
@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 博客和后台托管 | Vercel Hobby | 两个个人项目，均连接 `Nocticur/Firefly` 的 `master`；个人非商业博客须符合 Hobby 用途条款 |
 | 草稿、历史、登录会话和限流 | Neon Free PostgreSQL | 创建 Free 项目，不选付费计划或自动扩容付费项；只给对应环境填写数据库连接串 |
-| 管理入口 | 服务端密码 + GitHub OAuth | `ADMIN_ENTRY_PASSWORD` 与 GitHub OAuth App；不采购第三方登录套餐 |
+| 管理入口 | 服务端密码直接登录 | 仅验证 `ADMIN_ENTRY_PASSWORD`，无需第三方登录服务或付费认证套餐 |
 | 内容读取、发布 | GitHub App + Vercel 部署 | GitHub App 限定此仓库；在免费额度内使用，显式发布，不按每次保存触发部署 |
 | 图片、备份 | Vercel Blob | 只创建账户中明确支持 Hobby 免费额度的 public / private store；默认不填写令牌，超额度停用相应功能，不升级套餐 |
 | 评论、友链校验 | Cloudflare Turnstile Free | 可选；公开评论默认关闭，关闭时不必配置评论服务 |

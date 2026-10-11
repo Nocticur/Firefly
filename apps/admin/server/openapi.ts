@@ -18,11 +18,7 @@ const string = { type: "string" }; const revision = { type: "integer", minimum: 
 route("get", "/api/health", "System", "Runtime health (does not claim service readiness)", true);
 route("get", "/api/openapi.json", "System", "API specification", true);
 route("get", "/api/auth/entry", "Authentication", "Read entry verification status without revealing credentials", true);
-route("post", "/api/auth/entry", "Authentication", "Verify server-side password with same Origin and persistent rate limits", true, { password: { type: "string", minLength: 1, maxLength: 256, writeOnly: true } }, ["password"]);
-route("get", "/api/auth/github", "Authentication", "Start GitHub OAuth", true);
-route("get", "/api/auth/callback", "Authentication", "Fixed OAuth callback; verifies state and numeric user ID", true);
-paths["/api/auth/github"].get.security = [{ entry: [] }];
-paths["/api/auth/callback"].get.security = [{ entry: [] }];
+route("post", "/api/auth/entry", "Authentication", "Verify server-side password and create an administrator session; requires same Origin and persistent rate limits", true, { password: { type: "string", minLength: 1, maxLength: 256, writeOnly: true } }, ["password"]);
 route("get", "/api/auth/session", "Authentication", "Current administrator and CSRF token");
 route("post", "/api/auth/logout", "Authentication", "Revoke current session");
 route("get", "/api/posts", "Content", "List private management records");
@@ -67,4 +63,4 @@ route("post", "/api/maintenance/restore", "Maintenance", "Validate in isolated d
 route("post", "/api/maintenance/check", "Maintenance", "Read deployment counts and theme release information");
 route("get", "/api/maintenance/cron", "Maintenance", "Authenticated daily checks and backup", true);
 paths["/api/maintenance/cron"].get.security = [{ cron: [] }];
-export const openApiDocument = { openapi: "3.1.0", info: { title: "Nocticur management API", version: "0.1.0" }, servers: [{ url: "https://admin.mourn.top" }], paths, components: { securitySchemes: { session: { type: "apiKey", in: "cookie", name: "__Host-admin-session" }, entry: { type: "apiKey", in: "cookie", name: "__Host-admin-entry", description: "Server-verified password credential required alongside the GitHub session, including for GET; password rotation invalidates it" }, csrf: { type: "apiKey", in: "header", name: "x-csrf-token", description: "Required for writes together with same management Origin and both authentication Cookies" }, cron: { type: "http", scheme: "bearer" } } } };
+export const openApiDocument = { openapi: "3.1.0", info: { title: "Nocticur management API", version: "0.1.0" }, servers: [{ url: "https://admin.mourn.top" }], paths, components: { securitySchemes: { session: { type: "apiKey", in: "cookie", name: "__Host-admin-session" }, entry: { type: "apiKey", in: "cookie", name: "__Host-admin-entry", description: "Server-verified password credential required alongside the password-authenticated session, including for GET; password rotation invalidates it" }, csrf: { type: "apiKey", in: "header", name: "x-csrf-token", description: "Required for writes together with same management Origin and both authentication Cookies" }, cron: { type: "http", scheme: "bearer" } } } };

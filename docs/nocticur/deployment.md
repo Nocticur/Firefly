@@ -2,7 +2,7 @@
 
 本说明对应已选择的 Firefly 方案。先完成服务配置，在已确定的 Production 配置中按验收需要分别开启发布、邮件和维护；完成 [acceptance.md](./acceptance.md) 平台验收后再投入正式运行。实际秘密值填写在 Vercel / GitHub / Neon / Resend 的安全配置页面，不发送到聊天，不写入仓库、构建产物或日志。
 
-本项目按用户要求使用 **Vercel Hobby 免费套餐**部署，配套服务选择 Free；不升级 Pro，不购买附加项。先阅读 [免费部署说明](./free-deployment.md)。后台密码由管理项目的 `ADMIN_ENTRY_PASSWORD` 提供，至少 12 个字符，建议随机 16 位以上；添加或更换后重新部署管理项目。密码通过后仍须使用已配置的 GitHub 管理员账号验证。
+本项目按用户要求使用 **Vercel Hobby 免费套餐**部署，配套服务选择 Free；不升级 Pro，不购买附加项。先阅读 [免费部署说明](./free-deployment.md)。后台只验证管理项目的 `ADMIN_ENTRY_PASSWORD`，正确后直接进入；至少 12 个字符，建议随机 16 位以上。添加或更换密码后重新部署管理项目。
 
 ## 两个 Vercel 项目
 
@@ -37,7 +37,7 @@
 | 变量 | 用途与范围 |
 | --- | --- |
 | `GITHUB_REPOSITORY` | 固定 `Nocticur/Firefly`，用于站点环境 ID；发布提供者绑定此仓库和 `master` |
-| `ADMIN_GITHUB_USER_ID` | 管理员数字 ID `285582250`；登录名不是权限凭据 |
+| `ADMIN_ENTRY_PASSWORD` | 服务端管理密码，至少 12 个字符；正确后直接建立后台会话，各环境使用不同值 |
 | `ADMIN_ORIGIN` / `PUBLIC_SITE_ORIGIN` | 固定 `https://admin.mourn.top` / `https://blog.mourn.top`，不含末尾 `/` |
 | `ADMIN_PREVIEW_ORIGIN` / `PUBLIC_PREVIEW_ORIGIN` | 当前隔离 Preview 的精确 HTTPS origin |
 | `ADMIN_DEV_ORIGIN` / `PUBLIC_DEV_ORIGIN` | 本地开发 origin；默认 `http://localhost:3000` / `http://localhost:4321` |
@@ -45,7 +45,6 @@
 | `ADMIN_PREVIEW_DATABASE_URL` | 隔离 Preview 连接；可接受专属 `PREVIEW_DATABASE_URL`，不会回退生产 `DATABASE_URL` |
 | `ADMIN_DEVELOPMENT_DATABASE_URL` | 隔离开发连接；兼容 `ADMIN_DATABASE_URL` |
 | `RESTORE_DATABASE_URL` | 独立恢复验证库，数据库名必须与生产不同，并已完成迁移 |
-| `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | GitHub 登录配置 |
 | `GITHUB_APP_ID` / `GITHUB_INSTALLATION_ID` / `GITHUB_APP_PRIVATE_KEY` | 仅安装于目标仓库的 GitHub App 身份，读基线及原子提交 |
 | `VERCEL_TOKEN` / `VERCEL_BLOG_PROJECT_ID` | 管理 Production 核验博客部署；项目 ID 必须是博客项目 |
 | `VERCEL_TEAM_ID` | 项目属于团队时填写对应团队 ID |
@@ -61,7 +60,7 @@
 
 评论引擎保留原来的关闭状态：`src/config/commentConfig.ts` 的 `type` 当前为 `none`。准备验收本站评论时，显式选择 `nocticur` 并完整构建，同时将后台 `ENABLE_PUBLIC_COMMENTS` 设为 `true`，检查具体文章的评论开关。仅填写 Turnstile 变量不会启用评论。友链申请不依赖评论开关；后台核验小组件 action（`comments` / `friend_request`）及 hostname。公开评论采用有界游标分页。
 
-当前根 `vercel.json` 的转发目标固定为生产管理域名。临时博客 Preview 的写入来源会被生产 API 拒绝，**不能将这种 Preview 宣称为可写隔离联调环境**。需要互动联调时，先为隔离部署配置指向隔离管理项目的转发与精确 origins；否则 Preview 仅用于静态内容检查，并保持互动提交关闭。OAuth 同样只接受 `https://admin.mourn.top`，临时 Preview 管理域名不能进行生产登录；不要复制生产 Cookie 或会话数据库到 Preview。
+当前根 `vercel.json` 的转发目标固定为生产管理域名。临时博客 Preview 的写入来源会被生产 API 拒绝，**不能将这种 Preview 宣称为可写隔离联调环境**。需要互动联调时，先为隔离部署配置指向隔离管理项目的转发与精确 origins；否则博客 Preview 仅用于静态内容检查，并保持互动提交关闭。管理 Preview 使用专属管理 origin、隔离数据库与不同密码登录；不要复制生产 Cookie 或会话数据库。
 
 ## Neon 与数据库迁移
 
@@ -79,17 +78,11 @@ pnpm --filter @nocticur/admin db:migrate
 
 本地开发可使用专用 PostgreSQL，例如只绑定 loopback 的测试实例；CI 的无密码 trust 连接只用于临时测试服务，不能照抄为公网或生产数据库配置。
 
-## GitHub 登录与原子提交
+## 密码登录与 GitHub 原子提交
 
-创建 GitHub OAuth 登录配置，回调精确填写：
+管理项目只需配置 `ADMIN_ENTRY_PASSWORD` 及本节之前的环境、origin 和数据库变量。输入正确密码后直接建立 12 小时会话，无需用户名、GitHub OAuth App 或管理员数字 ID。管理域名必须已有有效 HTTPS；服务端校验登录来源并持久限流，后续管理写入继续校验 Origin 与 CSRF。退出登录撤销会话；更换密码并重新部署后旧凭证失效。旧 OAuth 登录和回调路由已移除，旧 GitHub 会话须重新输入密码。
 
-```text
-https://admin.mourn.top/api/auth/callback
-```
-
-应用只申请 `read:user`，随后调用 GitHub 用户接口校验数字 ID `285582250`。OAuth state 一次性使用，管理员会话有效期 12 小时。管理域名必须已有有效 HTTPS；不同大小写、协议、路径或临时 Preview 域名不能替代固定回调。
-
-另建 GitHub App，安装范围只选 `Nocticur/Firefly`，Repository permissions 的 Contents 允许 read/write，Metadata 使用 GitHub 所需读取权限。读基线请求申请只读 Contents 令牌；生产发布临时申请写令牌，以 `expectedHeadOid` 的 GraphQL 原子提交更新 `master`。不要用用户 PAT 代替仓库写入身份。
+导入与发布内容时另建 GitHub App，安装范围只选 `Nocticur/Firefly`，Repository permissions 的 Contents 允许 read/write，Metadata 使用 GitHub 所需读取权限。读基线请求申请只读 Contents 令牌；生产发布临时申请写令牌，以 `expectedHeadOid` 的 GraphQL 原子提交更新 `master`。不要用用户 PAT 代替仓库写入身份；App 配置不参与密码登录。
 
 将 App ID、installation ID 和 PEM 私钥安全配置到管理项目；代码支持多行 PEM 与字面量 `\n`。分支保护应允许该 App 执行已经授权的内容提交；若强制 PR 使原子提交被拒绝，须调整为明确允许此 App 的目标规则或保留发布关闭状态。GitHub 的读取代理或 `git ls-remote` 成功只证明读取，不能证明 App 或写权限可用。
 
@@ -146,7 +139,7 @@ https://admin.mourn.top/api/webhooks/resend
 ## 上线检查
 
 1. 在新项目临时地址检查构建与 API `no-store`，核对 Fluid compute、四条迁移及隔离配置；确认旧后台和 GitHub Pages 不再拥有目标站点生产写入口。
-2. 配置固定管理域名与 HTTPS，完成真实 OAuth 管理员登录、错误身份拒绝、CSRF、基线导入、媒体直传和私有读取验收。域名首次绑定前记录现有 DNS 与部署状态。
+2. 配置固定管理域名与 HTTPS，完成真实密码登录、错误密码拒绝、会话/CSRF、基线导入、媒体直传和私有读取验收。域名首次绑定前记录现有 DNS 与部署状态。
 3. 在博客项目完成完整生产构建，检查 15 篇、中文固定地址、MDX、相对图片、RSS 与 Pagefind；确认草稿不在任何公开索引。
 4. 按 [acceptance.md](./acceptance.md) 验证发布冲突、Workflow 重试、生产别名与清单一致、Turnstile 互动、友链邮件、备份与恢复，再确认生产开关和每日 Cron。
 5. 将博客域名指向验收过的博客项目，记录目标 Git SHA、Vercel deployment ID 与清单摘要。域名切换后再次读取固定生产域名清单与代表性页面。
