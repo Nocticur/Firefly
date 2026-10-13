@@ -20,13 +20,12 @@ export const en: Translation = {
 	[Key.navMine]: "Mine",
 	[Key.navAbout]: "About",
 	[Key.navLinks]: "Links",
+	[Key.navAnime]: "Anime",
+	[Key.navWebsites]: "Websites",
 	[Key.all]: "All",
 
 	[Key.tags]: "Tags",
 	[Key.categories]: "Categories",
-	[Key.allCategories]: "All Categories",
-	[Key.allTags]: "All Tags",
-	[Key.allSeries]: "All Series",
 	[Key.recentPosts]: "Recent Posts",
 	[Key.postList]: "Post List",
 	[Key.tableOfContents]: "Table of Contents",
@@ -78,8 +77,6 @@ export const en: Translation = {
 	[Key.commentSection]: "Comments",
 	[Key.commentSubtitle]: "Share your thoughts and discuss with everyone",
 	[Key.commentNotConfigured]: "Comment system not configured",
-	[Key.guestbookCommentHint]:
-		"You have not enabled the comment system in the configuration file yet. After enabling it, visitors will be able to leave messages here",
 	[Key.friends]: "Friends",
 	[Key.friendsDescription]:
 		"Here are my friends, welcome to visit and communicate with each other",
@@ -102,9 +99,6 @@ export const en: Translation = {
 	[Key.projectStatusDeveloping]: "In Development",
 	[Key.projectStatusPublished]: "Published",
 	[Key.projectStatusArchived]: "Archived",
-	[Key.guestbook]: "Guestbook",
-	[Key.guestbookDescription]:
-		"Welcome to leave your mark here, share your thoughts and suggestions",
 	[Key.untitled]: "Untitled",
 	[Key.uncategorized]: "Uncategorized",
 	[Key.noTags]: "No Tags",
@@ -372,12 +366,6 @@ export const en: Translation = {
 	[Key.noRelatedPosts]: "No related posts",
 	[Key.noRandomPosts]: "No random posts",
 
-	// Article Series
-	[Key.series]: "Series",
-	[Key.seriesPartOf]: "Part of series",
-	[Key.seriesPart]: "Part {n}",
-	[Key.seriesThisArticle]: "This article",
-	[Key.noSeries]: "No series yet",
 
 	// Encrypted
 	[Key.postEncrypted]: "This post is encrypted",

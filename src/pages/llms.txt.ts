@@ -28,12 +28,6 @@ const KEY_PAGES: KeyPage[] = [
 		pageKey: "friends",
 	},
 	{
-		labelKey: I18nKey.guestbook,
-		path: "/guestbook/",
-		descKey: I18nKey.guestbookDescription,
-		pageKey: "guestbook",
-	},
-	{
 		labelKey: I18nKey.dynamic,
 		path: "/dynamic/",
 		descKey: I18nKey.dynamicDescription,

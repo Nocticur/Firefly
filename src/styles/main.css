@@ -364,11 +364,6 @@ html {
         background-color: var(--card-bg-transparent) !important;
     }
 
-    /* 透明模式：文章页系列导航盒底色由实色换为半透明 */
-    .wallpaper-transparent .series-nav-toggle {
-        background-color: var(--card-bg-transparent) !important;
-    }
-
     h1, h2, h3, h4, h5, h6, p, a, span, li, ul, ol, blockquote, code, pre, table, th, td, strong {
         @apply transition-colors duration-150;
     }
@@ -471,13 +466,11 @@ html {
         @apply absolute top-full left-0 pt-2 pointer-events-none z-50;
     }
 
-    .dropdown-container:hover .dropdown-menu,
-    .dropdown-container:focus-within .dropdown-menu {
+    .dropdown-container[data-dropdown-open="true"] .dropdown-menu {
         @apply pointer-events-auto;
     }
 
-    .dropdown-container:hover .dropdown-arrow,
-    .dropdown-container:focus-within .dropdown-arrow {
+    .dropdown-container[data-dropdown-open="true"] .dropdown-arrow {
         @apply rotate-180;
     }
 
@@ -486,8 +479,7 @@ html {
         opacity-0 translate-y-[-8px] transition-[opacity,translate,background-color,border-color] duration-200 ease-out;
     }
 
-    .dropdown-container:hover .dropdown-content,
-    .dropdown-container:focus-within .dropdown-content {
+    .dropdown-container[data-dropdown-open="true"] .dropdown-content {
         @apply opacity-100 translate-y-0;
     }
 
@@ -521,11 +513,6 @@ html {
         .dropdown-container {
             @apply hidden;
         }
-    }
-
-    /* 无障碍支持 */
-    .dropdown-container:focus-within .dropdown-menu {
-        @apply pointer-events-auto;
     }
 
     .meta-icon {

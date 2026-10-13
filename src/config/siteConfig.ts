@@ -13,8 +13,6 @@ const pages = resolvePageToggles({
 
 	// 友链页面开关
 	friends: true,
-	// 留言板页面开关，需要配置评论系统
-	guestbook: true,
 
 	// ── 我的 (My) ──────────────────────────────────
 
@@ -27,7 +25,7 @@ const pages = resolvePageToggles({
 	// 书签导航页面开关
 	booknav: true,
 	// 哔哩哔哩追番页面开关
-	bilibili: false,
+	bilibili: true,
 	// 番组计划页面开关
 	bangumi: false,
 	// VNDB页面开关
@@ -120,11 +118,11 @@ export const siteConfig: SiteConfig = applyManagedSiteSettings({
 		// 导航栏标题
 		title: "Nocticur的博客",
 		// 全宽导航栏，导航栏是否占满屏幕宽度
-		widthFull: false,
+		widthFull: true,
 		// 导航菜单对齐方式，left：左对齐，center：居中
 		menuAlign: "center",
 		// 导航栏图标和标题是否跟随主题色
-		followTheme: false,
+		followTheme: true,
 		// 导航栏模式navbarMode：
 		// "static"：不固定，随页面滚动消失
 		// "fixed"：固定在顶部常显
@@ -263,7 +261,7 @@ export const siteConfig: SiteConfig = applyManagedSiteSettings({
 	// ── Bilibili配置 ──────────────────────────────────
 	bilibili: {
 		// 你的 Bilibili 用户 UID
-		uid: "38932988",
+		uid: "645892937",
 	},
 
 	// ── 番组计划bangumi配置 ──────────────────────────────────

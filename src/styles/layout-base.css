@@ -68,12 +68,12 @@
 
   /* 页脚宽度跨「侧栏 + 内容栏」，故挂在 #content-panel-inner 下、#content-column 之外；
      width 减 #main-grid 两侧内边距（px-2 → 1rem，md:px-4 → 2rem） */
-  #content-panel-inner > .site-footer {
+  #content-panel-inner > .site-footer-stage {
     width: calc(100% - 1rem);
     margin-inline: auto;
   }
   @media (min-width: 768px) {
-    #content-panel-inner > .site-footer {
+    #content-panel-inner > .site-footer-stage {
       width: calc(100% - 2rem);
     }
   }

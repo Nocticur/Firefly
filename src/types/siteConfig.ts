@@ -89,7 +89,6 @@ export type SiteConfig = {
 		booknav: boolean; // 书签导航页面开关
 		friends: boolean; // 友链页面开关
 		sponsor: boolean; // 打赏页面开关
-		guestbook: boolean; // 留言板页面开关
 		bangumi: boolean;
 		vndb: boolean;
 		mal: boolean; // MyAnimeList 页面开关

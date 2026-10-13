@@ -4,6 +4,7 @@ import type { CoverImageConfig } from "../types/coverImageConfig";
 import type { NavBarConfig, NavBarLink } from "../types/navBarConfig";
 import type { ProfileConfig } from "../types/profileConfig";
 import type { SiteConfig } from "../types/siteConfig";
+import { organizeNavigation } from "./nav-config-utils";
 
 // This list is also the publishing contract. Never spread arbitrary database settings into theme config.
 export const MANAGED_SETTING_KEYS = [
@@ -149,7 +150,9 @@ export function applyManagedCoverSettings(base: CoverImageConfig): CoverImageCon
 
 export function applyManagedNavigation(base: NavBarConfig): NavBarConfig {
 	const navigation = asRecord(document.navigation);
-	if (!Array.isArray(navigation.links)) return base;
+	const siteUrl = "https://blog.mourn.top/";
+	if (!Array.isArray(navigation.links)) return organizeNavigation(base, base, siteUrl);
+	const presets = base.links.flatMap((link) => [link, ...(link.children ?? [])]);
 	function readLinks(values: unknown[], originals: NavBarLink[], depth: number): NavBarLink[] {
 		return values.map((value, index) => ({ value: asRecord(value), index }))
 			.sort((a, b) => (typeof a.value.order === "number" ? a.value.order : a.index) - (typeof b.value.order === "number" ? b.value.order : b.index))
@@ -157,18 +160,18 @@ export function applyManagedNavigation(base: NavBarConfig): NavBarConfig {
 				const name = text(value.name, 120);
 				const url = safeManagedLink(value.url ?? "#");
 				if (!name || !url) return [];
-				const original = originals.find((item) => item.url !== "#" && item.url === url)
+				const original = presets.find((item) => item.url !== "#" && item.url === url)
 					?? originals.find((item) => item.name === name);
 				return [{
 					...original, name, url,
 					icon: iconName(value.icon) ?? original?.icon,
 					external: /^https:|^mailto:/.test(url),
-					children: depth < 1 && Array.isArray(value.children)
+					children: depth < 2 && Array.isArray(value.children)
 						? readLinks(value.children, original?.children ?? [], depth + 1) : original?.children,
 				}];
 			});
 	}
-	return { ...base, links: readLinks(navigation.links, base.links, 0) };
+	return organizeNavigation(base, { links: readLinks(navigation.links, base.links, 0) }, siteUrl);
 }
 export function getManagedIcons(): Partial<Record<ManagedIconFile, string>> {
 	const values = asRecord(document.icons);

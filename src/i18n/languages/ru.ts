@@ -20,13 +20,12 @@ export const ru: Translation = {
 	[Key.navMine]: "Моё",
 	[Key.navAbout]: "Обо мне",
 	[Key.navLinks]: "Ссылки",
+	[Key.navAnime]: "Аниме",
+	[Key.navWebsites]: "Сайты",
 	[Key.all]: "Все",
 
 	[Key.tags]: "Теги",
 	[Key.categories]: "Категории",
-	[Key.allCategories]: "Все категории",
-	[Key.allTags]: "Все теги",
-	[Key.allSeries]: "Все серии",
 	[Key.recentPosts]: "Последние посты",
 	[Key.postList]: "Список постов",
 	[Key.tableOfContents]: "Содержание",
@@ -78,8 +77,6 @@ export const ru: Translation = {
 	[Key.commentSection]: "Комментарии",
 	[Key.commentSubtitle]: "Поделитесь своими мыслями и обсудите с остальными",
 	[Key.commentNotConfigured]: "Система комментариев не настроена",
-	[Key.guestbookCommentHint]:
-		"Вы еще не включили систему комментариев в файле конфигурации. После включения посетители смогут оставлять сообщения здесь",
 	[Key.friends]: "Ссылки",
 	[Key.friendsDescription]:
 		"Вот мои друзья, добро пожаловать посетить и общаться друг с другом",
@@ -102,9 +99,6 @@ export const ru: Translation = {
 	[Key.projectStatusDeveloping]: "В разработке",
 	[Key.projectStatusPublished]: "Опубликовано",
 	[Key.projectStatusArchived]: "В архиве",
-	[Key.guestbook]: "Гостевая книга",
-	[Key.guestbookDescription]:
-		"Добро пожаловать, оставьте свой след здесь, поделитесь своими мыслями и предложениями",
 	[Key.untitled]: "Без названия",
 	[Key.uncategorized]: "Без категории",
 	[Key.noTags]: "Нет тегов",
@@ -373,12 +367,6 @@ export const ru: Translation = {
 	[Key.noRelatedPosts]: "Нет похожих статей",
 	[Key.noRandomPosts]: "Нет случайных статей",
 
-	// Серия статей
-	[Key.series]: "Серии",
-	[Key.seriesPartOf]: "Часть серии",
-	[Key.seriesPart]: "Часть {n}",
-	[Key.seriesThisArticle]: "Эта статья",
-	[Key.noSeries]: "Пока нет серий",
 
 	// Зашифровано
 	[Key.postEncrypted]: "Эта статья зашифрована",

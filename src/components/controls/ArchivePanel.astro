@@ -47,8 +47,7 @@ const i18nStrings = {
 	postCount: i18n(I18nKey.postCount),
 	postsCount: i18n(I18nKey.postsCount),
 };
-const tagsBaseUrl = url("/tags/");
-const categoriesBaseUrl = url("/categories/");
+const archiveUrl = url("/archive/");
 const foldOnFilter = collapseAllButFirst;
 ---
 
@@ -60,7 +59,7 @@ const foldOnFilter = collapseAllButFirst;
   <div id="archive-filter-header" class="mb-5 hidden">
     <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
       <div class="min-w-0 text-sm text-75">
-        <a id="archive-filter-link" href={tagsBaseUrl} class="text-50 hover:text-(--primary) transition-colors"></a>
+        <a id="archive-filter-link" href={archiveUrl} class="text-50 hover:text-(--primary) transition-colors"></a>
         <span class="mx-2 text-30">/</span>
         <span id="archive-filter-values" class="font-semibold text-(--primary)"></span>
         <span id="archive-filter-secondary" class="ml-2 text-50 hidden"></span>
@@ -163,7 +162,7 @@ const foldOnFilter = collapseAllButFirst;
   }
 </style>
 
-<script is:inline define:vars={{ i18nStrings, tagsBaseUrl, categoriesBaseUrl }}>
+<script is:inline define:vars={{ i18nStrings, archiveUrl }}>
   class ArchivePanel extends HTMLElement {
     constructor() {
       super();
@@ -293,7 +292,7 @@ const foldOnFilter = collapseAllButFirst;
 
       if (linkEl) {
         linkEl.textContent = primary.label;
-        linkEl.setAttribute("href", primary.isTag ? tagsBaseUrl : categoriesBaseUrl);
+        linkEl.setAttribute("href", archiveUrl);
       }
       if (valuesEl) valuesEl.textContent = fmtValues(primary);
       if (secondaryEl) {

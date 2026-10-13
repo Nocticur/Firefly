@@ -20,13 +20,12 @@ export const ko: Translation = {
 	[Key.navMine]: "마이",
 	[Key.navAbout]: "소개",
 	[Key.navLinks]: "링크",
+	[Key.navAnime]: "애니메이션",
+	[Key.navWebsites]: "웹사이트",
 	[Key.all]: "전체",
 
 	[Key.tags]: "태그",
 	[Key.categories]: "카테고리",
-	[Key.allCategories]: "모든 카테고리",
-	[Key.allTags]: "모든 태그",
-	[Key.allSeries]: "모든 시리즈",
 	[Key.recentPosts]: "최근 게시글",
 	[Key.postList]: "게시글 목록",
 	[Key.tableOfContents]: "목차",
@@ -78,8 +77,6 @@ export const ko: Translation = {
 	[Key.commentSection]: "댓글",
 	[Key.commentSubtitle]: "생각을 공유하고 모두와 이야기해 보세요",
 	[Key.commentNotConfigured]: "댓글 시스템이 설정되지 않았습니다",
-	[Key.guestbookCommentHint]:
-		"설정 파일에서 댓글 시스템을 아직 활성화하지 않았습니다. 활성화하면 방문자가 이곳에 메시지를 남길 수 있습니다",
 	[Key.friends]: "친구",
 	[Key.friendsDescription]:
 		"여기는 제 친구들입니다. 방문하여 서로 교류해 보세요",
@@ -101,9 +98,6 @@ export const ko: Translation = {
 	[Key.projectStatusDeveloping]: "개발 중",
 	[Key.projectStatusPublished]: "출시됨",
 	[Key.projectStatusArchived]: "보관됨",
-	[Key.guestbook]: "방명록",
-	[Key.guestbookDescription]:
-		"이곳에 흔적을 남기고 생각과 제안을 공유해 주세요",
 	[Key.untitled]: "제목 없음",
 	[Key.uncategorized]: "미분류",
 	[Key.noTags]: "태그 없음",
@@ -370,12 +364,6 @@ export const ko: Translation = {
 	[Key.noRelatedPosts]: "관련 게시글이 없습니다",
 	[Key.noRandomPosts]: "무작위 게시글이 없습니다",
 
-	// 글 시리즈
-	[Key.series]: "시리즈",
-	[Key.seriesPartOf]: "시리즈의 일부",
-	[Key.seriesPart]: "파트 {n}",
-	[Key.seriesThisArticle]: "이 글",
-	[Key.noSeries]: "시리즈가 없습니다",
 
 	// Encrypted
 	[Key.postEncrypted]: "이 게시글은 암호화되어 있습니다",

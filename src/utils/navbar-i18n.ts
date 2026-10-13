@@ -10,19 +10,16 @@ import type { NavBarLink } from "@/types/navBarConfig";
 
 const NAVBAR_DEFAULT_NAMES: Record<string, I18nKey> = {
 	// 分组
-	文章: I18nKey.navArticles,
-	社交: I18nKey.navSocial,
 	我的: I18nKey.navMine,
 	关于: I18nKey.navAbout,
 	链接: I18nKey.navLinks,
+	更多: I18nKey.more,
+	番剧: I18nKey.navAnime,
+	网址导航: I18nKey.navWebsites,
 	// 页面
 	主页: I18nKey.home,
 	归档: I18nKey.archive,
-	分类: I18nKey.categories,
-	标签: I18nKey.tags,
-	系列: I18nKey.series,
 	友链: I18nKey.friends,
-	留言: I18nKey.guestbook,
 	动态: I18nKey.dynamic,
 	项目: I18nKey.projects,
 	相册: I18nKey.gallery,

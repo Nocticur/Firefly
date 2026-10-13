@@ -20,13 +20,12 @@ export const zh_TW: Translation = {
 	[Key.navMine]: "我的",
 	[Key.navAbout]: "關於",
 	[Key.navLinks]: "連結",
+	[Key.navAnime]: "動畫",
+	[Key.navWebsites]: "網址導航",
 	[Key.all]: "全部",
 
 	[Key.tags]: "標籤",
 	[Key.categories]: "分類",
-	[Key.allCategories]: "全部分類",
-	[Key.allTags]: "全部標籤",
-	[Key.allSeries]: "全部系列",
 	[Key.recentPosts]: "最新文章",
 	[Key.postList]: "文章列表",
 	[Key.tableOfContents]: "文章目錄",
@@ -78,8 +77,6 @@ export const zh_TW: Translation = {
 	[Key.commentSection]: "評論區",
 	[Key.commentSubtitle]: "分享你的想法，與大家交流討論",
 	[Key.commentNotConfigured]: "評論系統暫未配置",
-	[Key.guestbookCommentHint]:
-		"您還未在配置文件中啟用評論系統，啟用後訪客才可在此留言",
 	[Key.friends]: "友鏈",
 	[Key.friendsDescription]: "這裡是我的朋友們，歡迎互相訪問交流",
 	[Key.searchFriends]: "搜尋友鏈...",
@@ -100,8 +97,6 @@ export const zh_TW: Translation = {
 	[Key.projectStatusDeveloping]: "開發中",
 	[Key.projectStatusPublished]: "已發佈",
 	[Key.projectStatusArchived]: "已封存",
-	[Key.guestbook]: "留言",
-	[Key.guestbookDescription]: "歡迎在這裡留下你的足跡，分享你的想法和建議",
 	[Key.untitled]: "無標題",
 	[Key.uncategorized]: "未分類",
 	[Key.noTags]: "無標籤",
@@ -364,12 +359,6 @@ export const zh_TW: Translation = {
 	[Key.noRelatedPosts]: "暫無相關文章",
 	[Key.noRandomPosts]: "暫無隨機文章",
 
-	// 文章系列
-	[Key.series]: "系列",
-	[Key.seriesPartOf]: "所屬系列",
-	[Key.seriesPart]: "第 {n} 篇",
-	[Key.seriesThisArticle]: "本文",
-	[Key.noSeries]: "暫無系列",
 
 	// 加密
 	[Key.postEncrypted]: "本文已加密",

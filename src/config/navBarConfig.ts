@@ -10,131 +10,49 @@ import { applyManagedNavigation } from "../utils/managed-settings";
 // 导航栏配置 - 根据顺序动态生成导航栏链接
 // NavBar Configuration - Dynamically generate navigation bar links based on order
 // ============================================================================
-const getDynamicNavBarConfig = (): NavBarConfig => {
-	// 基础导航栏链接
-	const links: NavBarLink[] = [];
-
-	// 主页
-	links.push(LinkPresets.Home);
-
-	// 文章及其子菜单
-	links.push({
-		name: "文章",
-		url: "#",
-		icon: "material-symbols:article",
-		children: [
-			// 归档
-			LinkPresets.Archive,
-
-			// 分类
-			LinkPresets.Categories,
-
-			// 标签
-			LinkPresets.Tags,
-
-			// 系列
-			LinkPresets.Series,
-		],
-	});
-
-	//社交及其子菜单
-	links.push({
-		name: "社交",
-		url: "#",
-		icon: "material-symbols:group",
-		children: [
-			// 友链
-			LinkPresets.Friends,
-
-			// 留言
-			LinkPresets.Guestbook,
-		],
-	});
-
-	// 我的及其子菜单
-	links.push({
-		name: "我的",
-		url: "#",
-		icon: "material-symbols:person",
-		children: [
-			// 动态
-			LinkPresets.Dynamic,
-
-			// 项目
-			LinkPresets.Projects,
-
-			// 相册
-			LinkPresets.Gallery,
-
-			// 书签导航
-			LinkPresets.Booknav,
-
-			// 哔哩哔哩追番
-			LinkPresets.Bilibili,
-
-			// 番组计划
-			LinkPresets.Bangumi,
-
-			// VNDB
-			LinkPresets.VNDB,
-
-			// MyAnimeList
-			LinkPresets.MAL,
-		],
-	});
-
-	// 关于及其子菜单
-	links.push({
-		name: "关于",
-		url: "#",
-		icon: "material-symbols:info",
-		children: [
-			// 打赏
-			LinkPresets.Sponsor,
-
-			// 关于页面
-			LinkPresets.About,
-		],
-	});
-
-	// 自定义导航栏链接
-	links.push({
-		name: "链接",
-		url: "#",
-		icon: "material-symbols:link",
-		// 子菜单
-		children: [
-			{
-				name: "GitHub",
-				url: "https://github.com/CuteLeaf/Firefly",
-				external: true,
-				icon: "fa7-brands:github",
-			},
-			{
-				name: "Gitee",
-				url: "https://gitee.com/CuteLeaf/Firefly",
-				external: true,
-				icon: "fa7-brands:gitee",
-			},
-			{
-				name: "Firefly文档",
-				url: "https://docs-firefly.cuteleaf.cn",
-				external: true,
-				icon: "material-symbols:docs",
-			},
-		],
-	});
-
-	// 文档链接
-	// links.push({
-	// 	name: "文档",
-	// 	url: "https://docs-firefly.cuteleaf.cn",
-	// 	external: true,
-	// 	icon: "material-symbols:docs",
-	// });
-
-	return { links } as NavBarConfig;
-};
+const getDynamicNavBarConfig = (): NavBarConfig => ({
+	links: [
+		LinkPresets.Home,
+		LinkPresets.Archive,
+		LinkPresets.Friends,
+		LinkPresets.Dynamic,
+		LinkPresets.Bilibili,
+		LinkPresets.Booknav,
+		LinkPresets.Gallery,
+		{
+			name: "更多",
+			url: "#",
+			icon: "material-symbols:more-horiz",
+			children: [
+				LinkPresets.Projects,
+				LinkPresets.About,
+				LinkPresets.Sponsor,
+				LinkPresets.Bangumi,
+				LinkPresets.VNDB,
+				LinkPresets.MAL,
+				{
+					name: "GitHub",
+					url: "https://github.com/CuteLeaf/Firefly",
+					external: true,
+					icon: "fa7-brands:github",
+				},
+				{
+					name: "Gitee",
+					url: "https://gitee.com/CuteLeaf/Firefly",
+					external: true,
+					icon: "fa7-brands:gitee",
+				},
+				{
+					name: "Firefly文档",
+					url: "https://docs-firefly.cuteleaf.cn",
+					external: true,
+					icon: "material-symbols:docs",
+				},
+				LinkPresets.Admin,
+			],
+		},
+	],
+});
 
 // 导航搜索配置
 export const navBarSearchConfig: NavBarSearchConfig = {
@@ -156,32 +74,11 @@ export const LinkPresets: Record<string, NavBarLink> = {
 		url: "/archive/",
 		icon: "material-symbols:archive",
 	},
-	Categories: {
-		name: "分类",
-		url: "/categories/",
-		icon: "material-symbols:folder-open-rounded",
-	},
-	Tags: {
-		name: "标签",
-		url: "/tags/",
-		icon: "material-symbols:tag-rounded",
-	},
-	Series: {
-		name: "系列",
-		url: "/series/",
-		icon: "material-symbols:layers",
-	},
 	Friends: {
 		name: "友链",
 		url: "/friends/",
 		icon: "material-symbols:link-2-rounded",
 		pageKey: "friends",
-	},
-	Guestbook: {
-		name: "留言",
-		url: "/guestbook/",
-		icon: "material-symbols:chat",
-		pageKey: "guestbook",
 	},
 	Dynamic: {
 		name: "动态",
@@ -202,13 +99,13 @@ export const LinkPresets: Record<string, NavBarLink> = {
 		pageKey: "gallery",
 	},
 	Booknav: {
-		name: "书签导航",
+		name: "网址导航",
 		url: "/booknav/",
 		icon: "material-symbols:bookmarks",
 		pageKey: "booknav",
 	},
 	Bilibili: {
-		name: "哔哩哔哩",
+		name: "番剧",
 		url: "/bilibili/",
 		icon: "fa7-brands:bilibili",
 		pageKey: "bilibili",
@@ -242,6 +139,14 @@ export const LinkPresets: Record<string, NavBarLink> = {
 		url: "/about/",
 		icon: "material-symbols:person",
 	},
+	Admin: {
+		name: "后台管理",
+		url: "https://admin.mourn.top/",
+		external: true,
+		icon: "material-symbols:admin-panel-settings-outline",
+	},
 };
 
-export const navBarConfig: NavBarConfig = applyManagedNavigation(getDynamicNavBarConfig());
+export const navBarConfig: NavBarConfig = applyManagedNavigation(
+	getDynamicNavBarConfig(),
+);

@@ -2,11 +2,13 @@
 import I18nKey from "@i18n/i18nKey";
 import { i18n } from "@i18n/translation";
 import { navigateToPage } from "@utils/navigation-utils";
-import { onMount } from "svelte";
+import { onMount, tick } from "svelte";
 import Icon from "@/components/common/Icon.svelte";
 import type { SearchResult } from "@/global";
 import { FLOATING_PANEL_CLOSE_EVENT } from "@/utils/floating-panel-utils";
 import { url as formatUrl, getSearchUrl } from "@/utils/url-utils";
+
+export let compact: boolean = false;
 
 // --- State ---
 let keywordDesktop = "";
@@ -39,11 +41,15 @@ const requestPagefind = (): void => {
 	window.__loadPagefind?.();
 };
 
-const togglePanel = () => {
+const togglePanel = async (): Promise<void> => {
 	requestPagefind();
-	document
-		.getElementById("search-panel")
-		?.classList.toggle("float-panel-closed");
+	const panel = document.getElementById("search-panel");
+	if (!panel) return;
+	const closed = panel.classList.toggle("float-panel-closed");
+	if (!closed && (compact || window.innerWidth < 1024)) {
+		await tick();
+		panel.querySelector<HTMLInputElement>("input")?.focus();
+	}
 };
 
 const handleDesktopFocus = (event: FocusEvent): void => {
@@ -183,6 +189,7 @@ $: if (initialized && (keywordMobile || keywordMobile === "")) {
 </script>
 
 <!-- search bar for desktop view -->
+{#if !compact}
 <div id="search-bar" class="hidden lg:flex transition-all items-center h-11 mr-2 rounded-lg
       bg-black/4 hover:bg-black/6 focus-within:bg-black/6
       dark:bg-white/5 dark:hover:bg-white/10 dark:focus-within:bg-white/10
@@ -190,16 +197,18 @@ $: if (initialized && (keywordMobile || keywordMobile === "")) {
     <Icon icon="material-symbols:search"
           class="absolute text-[1.25rem] pointer-events-none ml-3 transition my-auto text-black/30 dark:text-white/30"></Icon>
     <input id="search-input-desktop" placeholder="{i18n(I18nKey.search)}" bind:value={keywordDesktop}
+           aria-label={i18n(I18nKey.search)}
            aria-controls="search-panel" data-floating-panel-no-expanded
            on:focus={handleDesktopFocus}
            class="transition-all pl-10 text-sm bg-transparent outline-0
          h-full w-40 active:w-60 focus:w-60 text-black/50 dark:text-white/50"
     >
 </div>
+{/if}
 
 <!-- toggle btn for phone/tablet view -->
-<button on:click={togglePanel} aria-label="Search Panel" aria-controls="search-panel" aria-expanded="false" id="search-switch"
-		class="btn-plain scale-animation lg:hidden! rounded-lg w-11 h-11 active:scale-90">
+<button on:click={togglePanel} aria-label={i18n(I18nKey.search)} aria-controls="search-panel" aria-expanded="false" id="search-switch"
+		class={`btn-plain scale-animation rounded-lg w-11 h-11 active:scale-90 ${compact ? "" : "lg:hidden!"}`}>
     <Icon icon="material-symbols:search" class="text-[1.25rem]"></Icon>
 </button>
 
@@ -209,16 +218,17 @@ top-20 left-4 md:left-[unset] right-4 shadow-2xl rounded-2xl p-2"
      data-floating-panel data-floating-panel-trigger="search-switch search-input-desktop" inert aria-hidden="true">
 
     <!-- search bar inside panel for phone/tablet -->
-    <div id="search-bar-inside" class="flex relative lg:hidden transition-all items-center h-11 rounded-xl
+    <div id="search-bar-inside" class={`flex relative ${compact ? "" : "lg:hidden"} transition-all items-center h-11 rounded-xl
       bg-black/4 hover:bg-black/6 focus-within:bg-black/6
       dark:bg-white/5 dark:hover:bg-white/10 dark:focus-within:bg-white/10
-  ">
+  `}>
         <Icon icon="material-symbols:search"
               class="absolute text-[1.25rem] pointer-events-none ml-3 transition my-auto text-black/30 dark:text-white/30"></Icon>
         <input placeholder={i18n(I18nKey.search)} bind:value={keywordMobile}
+               aria-label={i18n(I18nKey.search)}
                on:focus={requestPagefind}
                class="pl-10 absolute inset-0 text-sm bg-transparent outline-0
-               focus:w-60 text-black/50 dark:text-white/50"
+               w-full text-black/50 dark:text-white/50"
         >
     </div>
 

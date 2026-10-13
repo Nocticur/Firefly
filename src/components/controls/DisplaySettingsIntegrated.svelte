@@ -138,12 +138,18 @@ const isSakuraSwitchable = displaySettingsConfig.sakuraSwitchable;
 const isCardBorderSwitchable = displaySettingsConfig.cardBorderSwitchable;
 const isCardFollowThemeSwitchable =
 	displaySettingsConfig.cardFollowThemeSwitchable;
-// 是否有任何横幅设置可显示（后续添加新设置时在此处添加条件）
-const hasBannerSettings =
-	isWavesSwitchable ||
-	isGradientSwitchable ||
-	isBannerTitleSwitchable ||
-	isBannerCarouselSwitchable;
+// 横幅与经典全屏布局支持水波纹和渐变效果。
+const showBannerEffects = $derived(
+	wallpaperMode === WALLPAPER_BANNER ||
+		(wallpaperMode === WALLPAPER_FULLSCREEN && fullscreenLayout === "classic"),
+);
+const showBannerSettings = $derived(
+	(wallpaperMode === WALLPAPER_BANNER ||
+		wallpaperMode === WALLPAPER_FULLSCREEN) &&
+		(isBannerTitleSwitchable ||
+			isBannerCarouselSwitchable ||
+			(showBannerEffects && (isWavesSwitchable || isGradientSwitchable))),
+);
 const overlaySwitchableConfig = displaySettingsConfig.overlaySwitchable;
 const isOverlaySettingsSwitchable =
 	typeof overlaySwitchableConfig === "boolean" ? overlaySwitchableConfig : true;
@@ -192,34 +198,33 @@ let cardSettingsIsDefault = $derived(
 			cardFollowThemeEnabled === defaultCardFollowThemeEnabled),
 );
 
-const hasAnyContent = $derived(
-	showThemeColor ||
-		isWallpaperSwitchable ||
-		isFullscreenLayoutSwitchable ||
-		allowLayoutSwitch ||
-		hasBannerSettings ||
-		hasOverlaySettings ||
-		isSakuraSwitchable,
+const showOverlaySettings = $derived(
+	(wallpaperMode === WALLPAPER_OVERLAY ||
+		(wallpaperMode === WALLPAPER_FULLSCREEN && fullscreenLayout === "hero")) &&
+		hasOverlaySettings &&
+		((isOverlayOpacitySwitchable && wallpaperMode !== WALLPAPER_FULLSCREEN) ||
+			(isOverlayBlurSwitchable &&
+				!(wallpaperMode === WALLPAPER_FULLSCREEN && !isFullscreenBlurRampEnabled)) ||
+			isOverlayCardOpacitySwitchable),
 );
 
 // --- Tab visibility ---
 const hasAppearanceTab = $derived(
 	showThemeColor ||
 		allowLayoutSwitch ||
+		showBannerSettings ||
 		isCardBorderSwitchable ||
 		isCardFollowThemeSwitchable,
 );
 const hasWallpaperTab = $derived(
 	isWallpaperSwitchable ||
 		isFullscreenLayoutSwitchable ||
-		((wallpaperMode === WALLPAPER_OVERLAY ||
-			wallpaperMode === WALLPAPER_FULLSCREEN) &&
-			hasOverlaySettings) ||
-		((wallpaperMode === WALLPAPER_BANNER ||
-			wallpaperMode === WALLPAPER_FULLSCREEN) &&
-			hasBannerSettings),
+		showOverlaySettings,
 );
 const hasEffectsTab = $derived(isSakuraSwitchable);
+const hasAnyContent = $derived(
+	hasAppearanceTab || hasWallpaperTab || hasEffectsTab,
+);
 
 let visibleTabs = $derived.by(() => {
 	const tabs: { key: TabKey; icon: string; label: string }[] = [];
@@ -256,11 +261,7 @@ $effect(() => {
 
 // Auto-switch to wallpaper tab when entering overlay/fullscreen mode
 $effect(() => {
-	if (
-		(wallpaperMode === WALLPAPER_OVERLAY ||
-			wallpaperMode === WALLPAPER_FULLSCREEN) &&
-		hasOverlaySettings
-	) {
+	if (showOverlaySettings) {
 		activeTab = "wallpaper";
 	}
 });
@@ -314,10 +315,6 @@ let overlaySliderItems = $derived<OverlaySliderItem[]>([
 		},
 	},
 ]);
-// 当前模式下是否有任何 overlay 滑块实际可见（模糊滑块可能因关闭模糊渐变而隐藏）
-let hasVisibleOverlaySlider = $derived(
-	overlaySliderItems.some((item) => item.enabled),
-);
 
 function resetHue() {
 	hue = getDefaultHue();
@@ -506,11 +503,11 @@ function refreshAllRangeProgress() {
 	});
 }
 
-function switchLayout() {
-	if (!mounted || isSwitching) return;
+function switchLayout(layout: "list" | "grid") {
+	if (!mounted || isSwitching || currentLayout === layout) return;
 
 	isSwitching = true;
-	currentLayout = currentLayout === "list" ? "grid" : "list";
+	currentLayout = layout;
 	localStorage.setItem("postListLayout", currentLayout);
 
 	// 触发自定义事件，通知页面布局已改变
@@ -727,7 +724,7 @@ $effect(() => {
 					class:opacity-60={currentLayout !== 'list'}
 					class:bg-(--btn-regular-bg-hover)={currentLayout === 'list'}
 					disabled={isSwitching}
-					onclick={switchLayout}
+					onclick={() => switchLayout("list")}
 					title={i18n(I18nKey.postListLayoutList)}
 				>
 					<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
@@ -741,7 +738,7 @@ $effect(() => {
 					class:opacity-60={currentLayout !== 'grid'}
 					class:bg-(--btn-regular-bg-hover)={currentLayout === 'grid'}
 					disabled={isSwitching}
-					onclick={switchLayout}
+					onclick={() => switchLayout("grid")}
 					title={i18n(I18nKey.postListLayoutGrid)}
 				>
 					<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
@@ -749,6 +746,96 @@ $effect(() => {
 					</svg>
 					<span class="text-xs font-medium">{i18n(I18nKey.postListLayoutGrid)}</span>
 				</button>
+			</div>
+		</div>
+		{/if}
+
+		<!-- Banner Settings Section -->
+		{#if showBannerSettings}
+		<div class="">
+			<div class="section-title">
+				{i18n(I18nKey.wallpaperSettings)}
+				<button aria-label="Reset to Default" class="btn-regular rounded-md active:scale-90"
+						class:opacity-0={bannerSettingsIsDefault} class:pointer-events-none={bannerSettingsIsDefault}
+						disabled={bannerSettingsIsDefault} aria-hidden={bannerSettingsIsDefault ? "true" : undefined} onclick={resetBannerSettings}>
+					<div class="text-(--btn-content)">
+						<Icon icon="fa7-solid:arrow-rotate-left" class="text-[0.75rem]"></Icon>
+					</div>
+				</button>
+			</div>
+			<div class="space-y-1">
+				<!-- Banner Title Switch -->
+				{#if isBannerTitleSwitchable}
+				<button
+					class="w-full btn-regular rounded-md py-2 px-3 flex items-center gap-3 text-left active:scale-95 transition-all relative overflow-hidden"
+					class:bg-(--btn-regular-bg-hover)={bannerTitleEnabled}
+					onclick={toggleBannerTitleEnabled}
+				>
+					<Icon icon="material-symbols:titlecase-rounded" class="text-[1.25rem] shrink-0"></Icon>
+					<span class="text-sm flex-1">{i18n(I18nKey.wallpaperTitle)}</span>
+					<div class="w-10 h-5 rounded-full transition-all duration-200 relative"
+						 class:bg-(--primary)={bannerTitleEnabled}
+						 class:bg-(--btn-regular-bg-active)={!bannerTitleEnabled}>
+						<div class="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all duration-200"
+							 class:left-0.5={!bannerTitleEnabled}
+							 class:left-5={bannerTitleEnabled}></div>
+					</div>
+				</button>
+				{/if}
+				<!-- Banner Carousel Switch -->
+				{#if isBannerCarouselSwitchable}
+				<button
+					class="w-full btn-regular rounded-md py-2 px-3 flex items-center gap-3 text-left active:scale-95 transition-all relative overflow-hidden"
+					class:bg-(--btn-regular-bg-hover)={bannerCarouselEnabled}
+					onclick={toggleBannerCarouselEnabled}
+				>
+					<Icon icon="material-symbols:view-carousel-outline" class="text-[1.25rem] shrink-0"></Icon>
+					<span class="text-sm flex-1">{i18n(I18nKey.wallpaperCarousel)}</span>
+					<div class="w-10 h-5 rounded-full transition-all duration-200 relative"
+						 class:bg-(--primary)={bannerCarouselEnabled}
+						 class:bg-(--btn-regular-bg-active)={!bannerCarouselEnabled}>
+						<div class="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all duration-200"
+							 class:left-0.5={!bannerCarouselEnabled}
+							 class:left-5={bannerCarouselEnabled}></div>
+					</div>
+				</button>
+				{/if}
+				<!-- Waves Animation Switch（横幅模式和 classic 全屏模式） -->
+				{#if isWavesSwitchable && showBannerEffects}
+				<button
+					class="w-full btn-regular rounded-md py-2 px-3 flex items-center gap-3 text-left active:scale-95 transition-all relative overflow-hidden"
+					class:bg-(--btn-regular-bg-hover)={wavesEnabled}
+					onclick={toggleWavesEnabled}
+				>
+					<Icon icon="material-symbols:airwave-rounded" class="text-[1.25rem] shrink-0"></Icon>
+					<span class="text-sm flex-1">{i18n(I18nKey.wavesAnimation)}</span>
+					<div class="w-10 h-5 rounded-full transition-all duration-200 relative"
+						 class:bg-(--primary)={wavesEnabled}
+						 class:bg-(--btn-regular-bg-active)={!wavesEnabled}>
+						<div class="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all duration-200"
+							 class:left-0.5={!wavesEnabled}
+							 class:left-5={wavesEnabled}></div>
+					</div>
+				</button>
+				{/if}
+				<!-- Gradient Transition Switch（横幅模式和 classic 全屏模式） -->
+				{#if isGradientSwitchable && showBannerEffects}
+				<button
+					class="w-full btn-regular rounded-md py-2 px-3 flex items-center gap-3 text-left active:scale-95 transition-all relative overflow-hidden"
+					class:bg-(--btn-regular-bg-hover)={gradientEnabled}
+					onclick={toggleGradientEnabled}
+				>
+					<Icon icon="material-symbols:gradient" class="text-[1.25rem] shrink-0"></Icon>
+					<span class="text-sm flex-1">{i18n(I18nKey.gradientTransition)}</span>
+					<div class="w-10 h-5 rounded-full transition-all duration-200 relative"
+						 class:bg-(--primary)={gradientEnabled}
+						 class:bg-(--btn-regular-bg-active)={!gradientEnabled}>
+						<div class="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all duration-200"
+							 class:left-0.5={!gradientEnabled}
+							 class:left-5={gradientEnabled}></div>
+					</div>
+				</button>
+				{/if}
 			</div>
 		</div>
 		{/if}
@@ -806,7 +893,7 @@ $effect(() => {
 		{/if}
 	{/if}
 
-	<!-- Wallpaper Tab: Mode + Overlay + Banner Settings -->
+	<!-- Wallpaper Tab: Mode + Fullscreen Layout + Overlay Settings -->
 	{#if activeTab === "wallpaper"}
 		<!-- Wallpaper Mode Section -->
 		{#if isWallpaperSwitchable}
@@ -899,7 +986,7 @@ $effect(() => {
 		{/if}
 
 		<!-- Overlay Settings Section（全屏壁纸模式也复用 overlay 的透明/模糊/卡片透明度设置） -->
-		{#if (wallpaperMode === WALLPAPER_OVERLAY || (wallpaperMode === WALLPAPER_FULLSCREEN && fullscreenLayout === "hero")) && hasOverlaySettings && hasVisibleOverlaySlider}
+		{#if showOverlaySettings}
 		<div class="">
 			<div class="section-title">
 				{i18n(I18nKey.overlaySettings)}
@@ -936,95 +1023,6 @@ $effect(() => {
 		</div>
 		{/if}
 
-		<!-- Banner Settings Section -->
-		{#if (wallpaperMode === WALLPAPER_BANNER || wallpaperMode === WALLPAPER_FULLSCREEN) && hasBannerSettings}
-		<div class="">
-			<div class="section-title">
-				{i18n(I18nKey.wallpaperSettings)}
-				<button aria-label="Reset to Default" class="btn-regular rounded-md active:scale-90"
-						class:opacity-0={bannerSettingsIsDefault} class:pointer-events-none={bannerSettingsIsDefault}
-						disabled={bannerSettingsIsDefault} aria-hidden={bannerSettingsIsDefault ? "true" : undefined} onclick={resetBannerSettings}>
-					<div class="text-(--btn-content)">
-						<Icon icon="fa7-solid:arrow-rotate-left" class="text-[0.75rem]"></Icon>
-					</div>
-				</button>
-			</div>
-			<div class="space-y-1">
-				<!-- Banner Title Switch -->
-				{#if isBannerTitleSwitchable}
-				<button
-					class="w-full btn-regular rounded-md py-2 px-3 flex items-center gap-3 text-left active:scale-95 transition-all relative overflow-hidden"
-					class:bg-(--btn-regular-bg-hover)={bannerTitleEnabled}
-					onclick={toggleBannerTitleEnabled}
-				>
-					<Icon icon="material-symbols:titlecase-rounded" class="text-[1.25rem] shrink-0"></Icon>
-					<span class="text-sm flex-1">{i18n(I18nKey.wallpaperTitle)}</span>
-					<div class="w-10 h-5 rounded-full transition-all duration-200 relative"
-						 class:bg-(--primary)={bannerTitleEnabled}
-						 class:bg-(--btn-regular-bg-active)={!bannerTitleEnabled}>
-						<div class="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all duration-200"
-							 class:left-0.5={!bannerTitleEnabled}
-							 class:left-5={bannerTitleEnabled}></div>
-					</div>
-				</button>
-				{/if}
-				<!-- Banner Carousel Switch -->
-				{#if isBannerCarouselSwitchable}
-				<button
-					class="w-full btn-regular rounded-md py-2 px-3 flex items-center gap-3 text-left active:scale-95 transition-all relative overflow-hidden"
-					class:bg-(--btn-regular-bg-hover)={bannerCarouselEnabled}
-					onclick={toggleBannerCarouselEnabled}
-				>
-					<Icon icon="material-symbols:view-carousel-outline" class="text-[1.25rem] shrink-0"></Icon>
-					<span class="text-sm flex-1">{i18n(I18nKey.wallpaperCarousel)}</span>
-					<div class="w-10 h-5 rounded-full transition-all duration-200 relative"
-						 class:bg-(--primary)={bannerCarouselEnabled}
-						 class:bg-(--btn-regular-bg-active)={!bannerCarouselEnabled}>
-						<div class="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all duration-200"
-							 class:left-0.5={!bannerCarouselEnabled}
-							 class:left-5={bannerCarouselEnabled}></div>
-					</div>
-				</button>
-				{/if}
-				<!-- Waves Animation Switch（横幅模式和 classic 全屏模式） -->
-				{#if isWavesSwitchable && (wallpaperMode === WALLPAPER_BANNER || (wallpaperMode === WALLPAPER_FULLSCREEN && fullscreenLayout === "classic"))}
-				<button
-					class="w-full btn-regular rounded-md py-2 px-3 flex items-center gap-3 text-left active:scale-95 transition-all relative overflow-hidden"
-					class:bg-(--btn-regular-bg-hover)={wavesEnabled}
-					onclick={toggleWavesEnabled}
-				>
-					<Icon icon="material-symbols:airwave-rounded" class="text-[1.25rem] shrink-0"></Icon>
-					<span class="text-sm flex-1">{i18n(I18nKey.wavesAnimation)}</span>
-					<div class="w-10 h-5 rounded-full transition-all duration-200 relative"
-						 class:bg-(--primary)={wavesEnabled}
-						 class:bg-(--btn-regular-bg-active)={!wavesEnabled}>
-						<div class="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all duration-200"
-							 class:left-0.5={!wavesEnabled}
-							 class:left-5={wavesEnabled}></div>
-					</div>
-				</button>
-				{/if}
-				<!-- Gradient Transition Switch（横幅模式和 classic 全屏模式） -->
-				{#if isGradientSwitchable && (wallpaperMode === WALLPAPER_BANNER || (wallpaperMode === WALLPAPER_FULLSCREEN && fullscreenLayout === "classic"))}
-				<button
-					class="w-full btn-regular rounded-md py-2 px-3 flex items-center gap-3 text-left active:scale-95 transition-all relative overflow-hidden"
-					class:bg-(--btn-regular-bg-hover)={gradientEnabled}
-					onclick={toggleGradientEnabled}
-				>
-					<Icon icon="material-symbols:gradient" class="text-[1.25rem] shrink-0"></Icon>
-					<span class="text-sm flex-1">{i18n(I18nKey.gradientTransition)}</span>
-					<div class="w-10 h-5 rounded-full transition-all duration-200 relative"
-						 class:bg-(--primary)={gradientEnabled}
-						 class:bg-(--btn-regular-bg-active)={!gradientEnabled}>
-						<div class="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all duration-200"
-							 class:left-0.5={!gradientEnabled}
-							 class:left-5={gradientEnabled}></div>
-					</div>
-				</button>
-				{/if}
-			</div>
-		</div>
-		{/if}
 	{/if}
 
 	<!-- Effects Tab: Sakura -->

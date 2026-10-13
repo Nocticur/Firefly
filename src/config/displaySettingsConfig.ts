@@ -20,8 +20,8 @@ export const displaySettingsConfig: DisplaySettingsConfig =
 		// 除了改这里，也可以在部署平台（Vercel / Cloudflare 等）配置环境变量开启，
 		// 无需改动本文件：PUBLIC_DISPLAY_SETTINGS=true
 		// 环境变量优先级更高，未设置或取值无法识别时使用这里的值
-		// 生产环境建议默认关闭，只在开发调试环境开启用来预览效果
-		enable: false,
+		// 默认开启，允许访客调整外观；需要关闭时可设置 PUBLIC_DISPLAY_SETTINGS=false
+		enable: true,
 
 		// ── 外观 (Appearance) ──────────────────────────────────
 

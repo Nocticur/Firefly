@@ -248,9 +248,6 @@ export default defineConfig({
 				if (pathname === "/friends/" && !siteConfig.pages.friends) {
 					return false;
 				}
-				if (pathname === "/guestbook/" && !siteConfig.pages.guestbook) {
-					return false;
-				}
 				if (pathname === "/booknav/" && !siteConfig.pages.booknav) {
 					return false;
 				}

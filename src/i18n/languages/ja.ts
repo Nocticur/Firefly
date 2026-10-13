@@ -20,13 +20,12 @@ export const ja: Translation = {
 	[Key.navMine]: "マイ",
 	[Key.navAbout]: "について",
 	[Key.navLinks]: "リンク",
+	[Key.navAnime]: "アニメ",
+	[Key.navWebsites]: "サイト案内",
 	[Key.all]: "すべて",
 
 	[Key.tags]: "タグ",
 	[Key.categories]: "カテゴリ",
-	[Key.allCategories]: "すべてのカテゴリ",
-	[Key.allTags]: "すべてのタグ",
-	[Key.allSeries]: "すべてのシリーズ",
 	[Key.recentPosts]: "最近の投稿",
 	[Key.postList]: "投稿リスト",
 	[Key.tableOfContents]: "目次",
@@ -78,8 +77,6 @@ export const ja: Translation = {
 	[Key.commentSection]: "コメント欄",
 	[Key.commentSubtitle]: "あなたの考えを共有し、みんなと議論しましょう",
 	[Key.commentNotConfigured]: "コメントシステムが設定されていません",
-	[Key.guestbookCommentHint]:
-		"設定ファイルでコメントシステムをまだ有効にしていません。有効にすると、訪問者がここにメッセージを残せるようになります",
 	[Key.friends]: "友達",
 	[Key.friendsDescription]:
 		"ここは私の友達です、お互いに訪問して交流することを歓迎します",
@@ -101,9 +98,6 @@ export const ja: Translation = {
 	[Key.projectStatusDeveloping]: "開発中",
 	[Key.projectStatusPublished]: "公開済み",
 	[Key.projectStatusArchived]: "アーカイブ",
-	[Key.guestbook]: "ゲストブック",
-	[Key.guestbookDescription]:
-		"ここに足跡を残して、あなたの考えや提案を共有してください",
 	[Key.untitled]: "無題",
 	[Key.uncategorized]: "未分類",
 	[Key.noTags]: "タグなし",
@@ -369,12 +363,6 @@ export const ja: Translation = {
 	[Key.noRelatedPosts]: "関連記事がありません",
 	[Key.noRandomPosts]: "ランダム記事がありません",
 
-	// 記事シリーズ
-	[Key.series]: "シリーズ",
-	[Key.seriesPartOf]: "シリーズの一部",
-	[Key.seriesPart]: "パート {n}",
-	[Key.seriesThisArticle]: "この記事",
-	[Key.noSeries]: "シリーズはありません",
 
 	// 暗号化
 	[Key.postEncrypted]: "この記事は暗号化されています",

@@ -11,7 +11,6 @@ import MainGridLayout from "@layouts/MainGridLayout.astro";
 import "@/styles/banner-post.css";
 import {
 	getRelatedPosts,
-	getSeriesPosts,
 	getSortedPosts,
 } from "@utils/content-utils";
 import {
@@ -26,7 +25,6 @@ import utc from "dayjs/plugin/utc";
 import CoverImage from "@/components/common/CoverImage.astro";
 import PostMetadata from "@/components/layout/PostMeta.astro";
 import RecommendedPost from "@/components/misc/RecommendedPost.astro";
-import SeriesNav from "@/components/misc/SeriesNav.astro";
 import SharePoster from "@/components/misc/SharePoster.svelte";
 import { coverImageConfig } from "@/config/coverImageConfig";
 import { licenseConfig } from "@/config/licenseConfig";
@@ -197,7 +195,6 @@ const jsonLd = {
 };
 
 const relatedPosts = await getRelatedPosts(entry, 5);
-const seriesData = await getSeriesPosts(entry);
 ---
 
 <MainGridLayout
@@ -397,16 +394,6 @@ const seriesData = await getSeriesPosts(entry);
               )
             }
           </div>
-        )
-      }
-
-      {
-        seriesData && (
-          <SeriesNav
-            seriesName={seriesData.seriesName}
-            posts={seriesData.posts}
-            currentPostId={entry.id}
-          />
         )
       }
 

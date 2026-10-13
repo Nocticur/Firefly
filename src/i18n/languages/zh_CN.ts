@@ -20,13 +20,12 @@ export const zh_CN: Translation = {
 	[Key.navMine]: "我的",
 	[Key.navAbout]: "关于",
 	[Key.navLinks]: "链接",
+	[Key.navAnime]: "番剧",
+	[Key.navWebsites]: "网址导航",
 	[Key.all]: "全部",
 
 	[Key.tags]: "标签",
 	[Key.categories]: "分类",
-	[Key.allCategories]: "全部分类",
-	[Key.allTags]: "全部标签",
-	[Key.allSeries]: "全部系列",
 	[Key.recentPosts]: "最新文章",
 	[Key.postList]: "文章列表",
 	[Key.tableOfContents]: "文章目录",
@@ -78,8 +77,6 @@ export const zh_CN: Translation = {
 	[Key.commentSection]: "评论区",
 	[Key.commentSubtitle]: "分享你的想法，与大家交流讨论",
 	[Key.commentNotConfigured]: "评论系统暂未配置",
-	[Key.guestbookCommentHint]:
-		"您还未在配置文件中启用评论系统，启用后访客才可在此留言",
 	[Key.friends]: "友链",
 	[Key.friendsDescription]: "这里是我的朋友们，欢迎互相访问交流",
 	[Key.searchFriends]: "搜索友链...",
@@ -100,8 +97,6 @@ export const zh_CN: Translation = {
 	[Key.projectStatusDeveloping]: "开发中",
 	[Key.projectStatusPublished]: "已发布",
 	[Key.projectStatusArchived]: "已归档",
-	[Key.guestbook]: "留言",
-	[Key.guestbookDescription]: "欢迎在这里留下你的足迹，分享你的想法和建议",
 	[Key.untitled]: "无标题",
 	[Key.uncategorized]: "未分类",
 	[Key.noTags]: "无标签",
@@ -362,12 +357,6 @@ export const zh_CN: Translation = {
 	[Key.noRelatedPosts]: "暂无相关文章",
 	[Key.noRandomPosts]: "暂无随机文章",
 
-	// 文章系列
-	[Key.series]: "系列",
-	[Key.seriesPartOf]: "所属系列",
-	[Key.seriesPart]: "第 {n} 篇",
-	[Key.seriesThisArticle]: "本文",
-	[Key.noSeries]: "暂无系列",
 
 	// 加密
 	[Key.postEncrypted]: "本文已加密",

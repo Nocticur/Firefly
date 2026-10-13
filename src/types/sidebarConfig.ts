@@ -2,8 +2,6 @@
 export type WidgetComponentType =
 	| "profile"
 	| "announcement"
-	| "categories"
-	| "tags"
 	| "sidebarToc"
 	| "advertisement"
 	| "stats"
@@ -35,7 +33,6 @@ export type MobileBottomComponentConfig = {
 
 // 组件通用专属配置
 export type WidgetSpecificConfig = {
-	collapseThreshold?: number; // 折叠阈值
 	calendar?: CalendarConfig; // 日历组件专用配置
 	ad?: AdConfig; // 广告组件专用配置
 	siteInfo?: SiteInfoConfig; // 站点信息组件专用配置
