@@ -56,6 +56,7 @@ const isActive = hasChildren
 					<DropdownItem
 						href={child.external ? child.url : url(child.url)}
 						target={child.external ? "_blank" : undefined}
+						reload={child.url === "/admin/"}
 						isLast={index === (processedLink.children?.length || 0) - 1}
 						class="dropdown-item focus-ring-inset h-10"
 					>
@@ -77,6 +78,8 @@ const isActive = hasChildren
 			class="navbar-link btn-plain scale-animation rounded-lg h-10 font-bold active:scale-95"
 			data-navbar-link
 			data-nav-href={processedLink.external ? undefined : url(processedLink.url)}
+			data-astro-reload={processedLink.url === "/admin/" || undefined}
+			data-no-swup={processedLink.url === "/admin/" || undefined}
 		>
 			<div class="navbar-link-inner flex items-center gap-1.5">
 				{processedLink.icon && <Icon name={processedLink.icon} class="text-[1.1rem] navbar-icon" />}

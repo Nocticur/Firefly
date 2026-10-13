@@ -19,9 +19,9 @@ const oldRoute = "/posts/云端/旧中文/";
 const newRoute = "/posts/云端/新中文/";
 const previous: Redirect[] = [{ from: "/posts/更早中文/", to: oldRoute, permanent: true }];
 const config = {
-	$schema: "https://openapi.vercel.sh/vercel.json", framework: "astro", outputDirectory: "dist", installCommand: "pnpm install --frozen-lockfile", buildCommand: "pnpm build",
+	$schema: "https://openapi.vercel.sh/vercel.json", framework: null, installCommand: "pnpm install --frozen-lockfile", buildCommand: "pnpm build:vercel",
 	headers: [{ source: "/(.*)", headers: [{ key: "X-Content-Type-Options", value: "nosniff" }] }],
-	rewrites: [{ source: "/api/public/:path*", destination: "https://admin.mourn.top/api/public/:path*" }],
+	crons: [{ path: "/api/maintenance/cron", schedule: "0 19 * * *" }],
 	redirects: [{ source: "/legacy/:path*", destination: "https://legacy.example/:path*", permanent: false }, { source: "/posts/:path*", destination: "https://archive.example/:path*", permanent: false }, { source: previous[0].from, destination: previous[0].to, permanent: true }],
 };
 const request = (id: string, revision: number) => ({ postIds: [id], expectedRevisions: { [id]: revision }, idempotencyKey: randomUUID() });

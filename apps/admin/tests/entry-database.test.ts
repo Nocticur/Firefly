@@ -125,7 +125,7 @@ test("password alone creates a durable administrator session with CSRF, expiry a
 		});
 		await t.test("removed OAuth launch and callback cannot create a session or call GitHub", async () => {
 			for (const path of ["/api/auth/github", "/api/auth/callback?state=invalid&code=invalid"]) {
-				const response = await app.request(`https://admin.mourn.top${path}`);
+				const response = await app.request(`https://blog.mourn.top${path}`);
 				assert.equal(response.status, 404);
 			}
 			assert.equal((await db.query("SELECT state_hash FROM oauth_states WHERE site_id=$1", [site])).length, 0);
@@ -176,7 +176,7 @@ test("password alone creates a durable administrator session with CSRF, expiry a
 		await t.test("production password quotas require trusted Vercel forwarding and ignore spoofed generic IP headers", async () => {
 			const proxySite = `${site}-proxy`;
 			process.env.APP_ENV = "production"; process.env.VERCEL_ENV = "production";
-			const proxyRequest = (headers: Record<string, string>) => new Request("https://admin.mourn.top/api/auth/entry", { headers });
+			const proxyRequest = (headers: Record<string, string>) => new Request("https://blog.mourn.top/api/auth/entry", { headers });
 			try {
 				await assert.rejects(() => consumeLoginAllowance(db, proxySite, proxyRequest({ "x-forwarded-for": "192.0.2.44" }), "synthetic-rate-secret", "entry"), (error: unknown) => error instanceof ApiFailure && error.status === 503);
 				process.env.VERCEL = "1";

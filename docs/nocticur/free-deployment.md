@@ -1,12 +1,12 @@
 # Vercel 免费部署
 
-用户要求整个后台不产生服务费用。博客与管理后台均部署到个人 Vercel **Hobby** 项目；不升级 Pro、不购买付费附加项，也不调用任何套餐升级或购买 API。代码中的密码校验、React 界面和编辑器没有付费授权依赖；本次新增入口没有新增软件依赖。
+用户要求整个后台不产生服务费用。博客与管理后台一起部署到现有的一个 Vercel **Hobby** 项目 `firefly`，后台在博客同源 `/admin/`，API 在 `/api/`；不升级 Pro、不购买付费附加项，也不调用任何套餐升级或购买 API。代码中的密码校验、React 界面和编辑器没有付费授权依赖；本次新增入口没有新增软件依赖。
 
 ## 服务选择
 
 | 功能 | 选择 | 免费部署设置 |
 | --- | --- | --- |
-| 博客和后台托管 | Vercel Hobby | 两个个人项目，均连接 `Nocticur/Firefly` 的 `master`；个人非商业博客须符合 Hobby 用途条款 |
+| 博客和后台托管 | Vercel Hobby | 一个项目，连接 `Nocticur/Firefly` 的 `master`；根目录构建命令 `pnpm build:vercel`，个人非商业博客须符合 Hobby 用途条款 |
 | 草稿、历史、登录会话和限流 | Neon Free PostgreSQL | 创建 Free 项目，不选付费计划或自动扩容付费项；只给对应环境填写数据库连接串 |
 | 管理入口 | 服务端密码直接登录 | 仅验证 `ADMIN_ENTRY_PASSWORD`，无需第三方登录服务或付费认证套餐 |
 | 内容读取、发布 | GitHub App + Vercel 部署 | GitHub App 限定此仓库；在免费额度内使用，显式发布，不按每次保存触发部署 |
@@ -26,7 +26,7 @@ Blob 令牌为空时，图片上传及云备份不会执行；已有文章与仓
 
 仓库为私有仓库时，GitHub Actions 也有免费分钟数和产物存储额度。账户的 Actions 付费用量预算设为 0 并阻止超预算使用；仓库构建产物已改为仅保留 1 天并提高压缩率，减少重复构建积累的存储。代码无法替用户修改个人账户的计费设置。
 
-本次云环境没有这些平台的生产凭据，未创建套餐、存储或部署。官方定价网站被当前环境出站策略拦截，未能实时核实 2026 年的具体免费额度；因此本说明不填写未经核实的额度数字。上线前以以下官方页面和实际账户中的 Free/Hobby 标记为准，不将本地构建通过描述为已经完成免费线上部署：
+本文不提供具体免费额度数字，也不证明平台服务已配置或上线。免费额度会随产品和账户条件调整，上线前以以下官方页面和实际账户中的 Free/Hobby 标记为准，不将本地构建通过描述为已经完成免费线上部署：
 
 - [Vercel Hobby](https://vercel.com/docs/plans/hobby)
 - [Vercel Blob 用量和定价](https://vercel.com/docs/vercel-blob/usage-and-pricing)
@@ -36,3 +36,5 @@ Blob 令牌为空时，图片上传及云备份不会执行；已有文章与仓
 - [Turnstile 方案](https://developers.cloudflare.com/turnstile/plans/)
 
 完整项目、迁移和变量步骤见 [deployment.md](./deployment.md) 与 [environment-variables.md](./environment-variables.md)。
+
+原 `firefly-admin` 项目属于已被本说明替代的两项目部署方案。删除旧项目不会把 Sensitive 环境变量移入 `firefly`；所需密码、数据库连接和服务密钥须从原服务安全配置到统一项目。后台源码仍位于同一仓库的 `apps/admin`，不需要创建第二个托管项目。

@@ -1,15 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "astro",
+  "framework": null,
   "installCommand": "pnpm install --frozen-lockfile",
-  "buildCommand": "pnpm build",
-  "outputDirectory": "dist",
-  "rewrites": [
-    {
-      "source": "/api/public/:path*",
-      "destination": "https://admin.mourn.top/api/public/:path*"
-    }
-  ],
+  "buildCommand": "pnpm build:vercel",
+  "crons": [{ "path": "/api/maintenance/cron", "schedule": "0 19 * * *" }],
   "headers": [
     {
       "source": "/(.*)",

@@ -48,7 +48,7 @@ package/
 .claude
 .mimocode
 
-# Separate Vercel management project outputs and local configuration
+# Admin development/build outputs and local configuration
 apps/admin/public/
 apps/admin/.nitro/
 apps/admin/.output/

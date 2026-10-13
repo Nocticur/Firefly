@@ -213,8 +213,8 @@ test("historical repository evidence reads its explicit immutable SHA without re
 test("deployment config and matching managed redirects are committed atomically while preserving other frozen fields", async () => {
 	const redirects = [{ from: "/posts/old/", to: "/posts/new/", permanent: true }];
 	const config = {
-		$schema: "https://openapi.vercel.sh/vercel.json", framework: "astro", buildCommand: "pnpm build", outputDirectory: "dist",
-		rewrites: [{ source: "/api/public/:path*", destination: "https://admin.mourn.top/api/public/:path*" }],
+		$schema: "https://openapi.vercel.sh/vercel.json", framework: null, buildCommand: "pnpm build:vercel",
+		crons: [{ path: "/api/maintenance/cron", schedule: "0 19 * * *" }],
 		headers: [{ source: "/(.*)", headers: [{ key: "X-Content-Type-Options", value: "nosniff" }] }],
 		redirects: [{ source: redirects[0].from, destination: redirects[0].to, permanent: true }, { source: "/legacy/:path*", destination: "https://legacy.example/:path*", permanent: false }],
 	};

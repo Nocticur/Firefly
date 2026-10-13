@@ -14,7 +14,7 @@ const databaseUrl = process.env.ADMIN_TEST_DATABASE_URL;
 const secret = "isolated-test-only-rate-secret";
 const consumePasswordLoginAllowance = (...args: [Database, string, Request, string]) => consumeLoginAllowance(...args, "entry");
 const failure = (code: string, status: number) => (error: unknown) => error instanceof ApiFailure && error.code === code && error.status === status;
-const loginRequest = (address: string) => new Request("https://admin.mourn.top/api/auth/entry", { headers: { "x-forwarded-for": address } });
+const loginRequest = (address: string) => new Request("https://blog.mourn.top/api/auth/entry", { headers: { "x-forwarded-for": address } });
 
 test("Password login counters persist, serialize concurrent requests and clean expired authentication data", { skip: !databaseUrl }, async (t) => {
 	const variables = ["APP_ENV", "VERCEL_ENV", "VERCEL", "ADMIN_DEVELOPMENT_DATABASE_URL", "ADMIN_ENTRY_PASSWORD", "GITHUB_REPOSITORY"] as const;
@@ -62,8 +62,8 @@ test("Password login counters persist, serialize concurrent requests and clean e
 			process.env.APP_ENV = "production"; process.env.VERCEL_ENV = "production";
 			await assert.rejects(consumePasswordLoginAllowance(db, productionSite, loginRequest("198.51.100.44"), secret), failure("LOGIN_CLIENT_UNVERIFIED", 503));
 			process.env.VERCEL = "1";
-			for (let index = 0; index < 5; index++) await consumePasswordLoginAllowance(db, productionSite, new Request("https://admin.mourn.top/api/auth/entry", { headers: { "x-vercel-forwarded-for": "198.51.100.44", "x-forwarded-for": `198.51.100.${100 + index}` } }), secret);
-			await assert.rejects(consumePasswordLoginAllowance(second, productionSite, new Request("https://admin.mourn.top/api/auth/entry", { headers: { "x-vercel-forwarded-for": "198.51.100.44", "x-forwarded-for": "198.51.100.200" } }), secret), failure("ENTRY_RATE_LIMITED", 429));
+			for (let index = 0; index < 5; index++) await consumePasswordLoginAllowance(db, productionSite, new Request("https://blog.mourn.top/api/auth/entry", { headers: { "x-vercel-forwarded-for": "198.51.100.44", "x-forwarded-for": `198.51.100.${100 + index}` } }), secret);
+			await assert.rejects(consumePasswordLoginAllowance(second, productionSite, new Request("https://blog.mourn.top/api/auth/entry", { headers: { "x-vercel-forwarded-for": "198.51.100.44", "x-forwarded-for": "198.51.100.200" } }), secret), failure("ENTRY_RATE_LIMITED", 429));
 			process.env.APP_ENV = "development"; delete process.env.VERCEL_ENV; delete process.env.VERCEL;
 		});
 		await t.test("obsolete OAuth URLs never launch a provider or allocate login state", async () => {
@@ -72,7 +72,7 @@ test("Password login counters persist, serialize concurrent requests and clean e
 			const countStates = async () => Number((await db.query("SELECT count(*)::int AS count FROM oauth_states WHERE site_id=$1", [site]))[0].count);
 			const before = await countStates();
 			for (const path of ["/api/auth/github", "/api/auth/callback?code=untrusted&state=untrusted"]) {
-				const response = await app.request(`https://admin.mourn.top${path}`, { headers: { Cookie: cookie, Origin: "https://admin.mourn.top" } });
+				const response = await app.request(`https://blog.mourn.top${path}`, { headers: { Cookie: cookie, Origin: "https://blog.mourn.top" } });
 				assert.equal(response.status, 404); assert.equal(response.headers.has("location"), false); assert.equal(response.headers.has("set-cookie"), false);
 			}
 			assert.equal(await countStates(), before);

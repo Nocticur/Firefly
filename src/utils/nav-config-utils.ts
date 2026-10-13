@@ -52,10 +52,15 @@ export function organizeNavigation(
 		if (!admin) return link;
 		const target = new URL(link.url, siteUrl);
 		const adminTarget = new URL(admin.url, siteUrl);
-		const isAdminRoot =
+		const path = target.pathname.replace(/\/+$/, "") || "/";
+		const isAdminEntry =
 			target.origin === adminTarget.origin &&
-			(target.pathname.replace(/\/+$/, "") || "/") === "/";
-		return localPath(link) === "/admin" || isAdminRoot ? admin : link;
+			path === (adminTarget.pathname.replace(/\/+$/, "") || "/");
+		const isLegacyAdminEntry =
+			target.origin === "https://admin.mourn.top" && path === "/";
+		return localPath(link) === "/admin" || isAdminEntry || isLegacyAdminEntry
+			? admin
+			: link;
 	}
 	const seen = new Set<string>();
 	const additionalLinks = [...savedLinks, ...(admin ? [admin] : [])]

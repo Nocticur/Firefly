@@ -141,8 +141,7 @@ export const LinkPresets: Record<string, NavBarLink> = {
 	},
 	Admin: {
 		name: "后台管理",
-		url: "https://admin.mourn.top/",
-		external: true,
+		url: "/admin/",
 		icon: "material-symbols:admin-panel-settings-outline",
 	},
 };

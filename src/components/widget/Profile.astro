@@ -93,10 +93,11 @@ const className = Astro.props.class;
             })(profileConfig.links[0])}
         </div>
 		<a
-			href="https://admin.mourn.top/"
+			href={url("/admin/")}
 			class="btn-regular flex w-full rounded-xl h-10 gap-2 mt-3 font-medium active:scale-95"
 			aria-label="后台管理"
 			data-astro-reload
+			data-no-swup
 		>
 			<Icon name="material-symbols:lock-outline-rounded" class="text-[1.25rem]" />
 			<span>后台管理</span>

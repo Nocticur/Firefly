@@ -49,7 +49,7 @@ export function EntryPage({ loading, serviceError, onRetry, onUnlocked }: Props)
 		<div className="entry-glow entry-glow-mint" aria-hidden="true" />
 		<div className="entry-glow entry-glow-pink" aria-hidden="true" />
 		<header className="entry-topbar">
-			<a className="entry-back" href="https://blog.mourn.top/"><ArrowLeft size={16} />返回博客</a>
+			<a className="entry-back" href="/"><ArrowLeft size={16} />返回博客</a>
 			<button className="entry-theme" type="button" onClick={() => setDark(!dark)} aria-label={dark ? "切换浅色主题" : "切换深色主题"}>{dark ? <Sun size={19} /> : <Moon size={19} />}</button>
 		</header>
 		<section className="entry-card" aria-labelledby="entry-title">

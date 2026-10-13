@@ -52,8 +52,7 @@ jobs:
       - run: pnpm --filter @nocticur/admin test
       - run: pnpm --filter @nocticur/admin exec tsx --test ../../scripts/generate-release-manifest.test.ts
       - run: pnpm --filter @nocticur/admin exec tsx --test ../../scripts/crypto-utils.test.ts
-      - run: pnpm build
-      - run: NITRO_PRESET=vercel pnpm --filter @nocticur/admin build
+      - run: pnpm build:vercel
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: validated-static-blog

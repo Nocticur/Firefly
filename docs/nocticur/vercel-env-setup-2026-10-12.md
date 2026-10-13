@@ -1,4 +1,6 @@
-# Vercel 环境变量添加回执与完整填写清单
+# Vercel 环境变量添加回执与完整填写清单（2026-10-12 历史记录）
+
+> **当前方案已更新（2026-10-13）：** 博客、`/admin/` 后台和 `/api/` 一起部署到现有 `firefly` 项目，根构建命令为 `pnpm build:vercel`。两个 Production origin 都填写 `https://blog.mourn.top`。以下项目数量、空值状态、旧后台域名及配置步骤仅记录 2026-10-12 的两项目操作，不代表当前平台状态，也不再作为部署指引。现行说明见 [deployment.md](./deployment.md) 与 [environment-variables.md](./environment-variables.md)。原 `firefly-admin` 的 Sensitive 值需从原服务安全填写到 `firefly`；本文不证明已迁移变量、删除旧项目或完成部署。
 
 已于 2026-10-12 读取云端「Firefly」会话 `01a11bc4-1b2a-7705-aa6b-bc9ace087098` 的最新完成结果（提交 `77f00f6`），并与本地模板和源码核对。
 
@@ -8,13 +10,13 @@
 - 所有密码、连接串、私钥和 token 留空；仅填已知公开配置与默认关闭开关。填写空项时直接编辑原记录，不必重新添加。
 - 当前账户页面显示 Hobby。没有升级套餐、购买附加项或创建数据库、Blob、邮件、Turnstile 服务，也没有创建后台部署或绑定新域名。
 
-## 先准备哪些
+## 历史方案：先准备哪些
 
 登录与编辑先填后台 Production 的 `ADMIN_ENTRY_PASSWORD`（3～10 个字符原密码）和 `ADMIN_PRODUCTION_DATABASE_URL`（Neon Free TLS 连接串）；数据库另须完成 4 条迁移。已有公开固定值已填。导入/发布再填 GitHub App 三项与 `VERCEL_TOKEN`；互动、媒体、邮件、维护等服务按需填写下表中的可选项。
 
 后台项目 Root Directory 为 `apps/admin`，框架 Other，安装命令 `pnpm install --frozen-lockfile`，构建命令 `NITRO_PRESET=vercel pnpm build`，连接 `Nocticur/Firefly`。目前未部署，填写变量不等于已完成上线验收。
 
-## 博客：全部 15 项
+## 历史博客项目：全部 15 项
 
 | 变量 | 环境 | 当前值/状态 | 用途与来源 |
 | --- | --- | --- | --- |
@@ -33,7 +35,7 @@
 | `PUBLIC_PAGES_SPONSOR` | Production、Preview、Development | 空值，待按需填写 | 可选页面开关：true/false；空值沿用代码中的现有开关。 |
 | `GITHUB_TOKEN` | Production | 空值，待按需填写 | 可选：博客构建时只读 GitHub API token，用于避免匿名限流；无需仓库写权限，不是后台发布凭据。 |
 
-## 后台：全部 38 个变量名 / 46 条记录
+## 历史独立后台项目：全部 38 个变量名 / 46 条记录
 
 | 变量 | 环境 | 当前值/状态 | 用途与来源 |
 | --- | --- | --- | --- |

@@ -30,8 +30,8 @@ export function constantTimeEqual(left: string, right: string): boolean {
 export function managementOrigin(): string {
 	const environment = runtimeEnvironment();
 	if (environment === "production") {
-		if (process.env.ADMIN_ORIGIN && process.env.ADMIN_ORIGIN !== "https://admin.mourn.top") throw new ApiFailure(503, "CONFIGURATION_REQUIRED", "生产 ADMIN_ORIGIN 必须是 https://admin.mourn.top");
-		return "https://admin.mourn.top";
+		if (process.env.ADMIN_ORIGIN && process.env.ADMIN_ORIGIN !== "https://blog.mourn.top") throw new ApiFailure(503, "CONFIGURATION_REQUIRED", "生产 ADMIN_ORIGIN 必须与博客一致：https://blog.mourn.top");
+		return "https://blog.mourn.top";
 	}
 	const origin = environment === "preview" ? process.env.ADMIN_PREVIEW_ORIGIN : process.env.ADMIN_DEV_ORIGIN || "http://localhost:3000";
 	if (!origin) throw new ApiFailure(503, "CONFIGURATION_REQUIRED", "缺少 ADMIN_PREVIEW_ORIGIN");

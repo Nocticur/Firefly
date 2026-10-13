@@ -1,8 +1,8 @@
 # 环境变量填写清单
 
-博客和后台是两个 Vercel 项目。除博客构建变量外，其余均填在**管理项目**的 Settings → Environment Variables。生产秘密只勾选 Production；Preview、Development 使用隔离服务。秘密值不要发到聊天或写入 Git。当前云环境没有配置这些生产凭据；本清单不是配置成功回执。
+博客和后台一起部署在现有 Vercel `firefly` 项目，以下变量全部填在这个项目的 Settings → Environment Variables。Production 后台地址为 `https://blog.mourn.top/admin/`，API 为同源 `/api/`。生产秘密只勾选 Production；Preview、Development 使用隔离服务。秘密值不要发到聊天或写入 Git。本清单是填写说明，不是变量迁移或上线成功回执。
 
-## 博客项目
+## 公开构建变量
 
 身份、域名、文章和头像已经写入代码，静态博客构建不需要后台服务秘密。
 
@@ -16,31 +16,31 @@
 
 页面键名：`PUBLIC_PAGES_FRIENDS`、`PUBLIC_PAGES_DYNAMIC`、`PUBLIC_PAGES_PROJECTS`、`PUBLIC_PAGES_GALLERY`、`PUBLIC_PAGES_BOOKNAV`、`PUBLIC_PAGES_BILIBILI`、`PUBLIC_PAGES_BANGUMI`、`PUBLIC_PAGES_VNDB`、`PUBLIC_PAGES_MAL`、`PUBLIC_PAGES_SPONSOR`。留空保留现有开关。
 
-**删除 `CF_WORKERS`，包括字符串 `false`**；它的存在会选择 Cloudflare adapter。博客完整 Build Command 为 `pnpm build`。
+**删除 `CF_WORKERS`，包括字符串 `false`**；它的存在会选择 Cloudflare adapter。统一 Vercel Build Command 为 `pnpm build:vercel`；`pnpm build` 仅生成静态博客。
 
-## 管理项目：基本配置与数据库
+## 后台基本配置与数据库
 
 | 变量 | 条件 | 填什么 / 从哪里取得 |
 | --- | --- | --- |
 | `APP_ENV` | 各环境必填 | Production 填 `production`，Preview 填 `preview`，本地填 `development`；与平台 `VERCEL_ENV` 一致 |
 | `GITHUB_REPOSITORY` | 固定值 | `Nocticur/Firefly`，用于站点/环境数据命名空间；发布目标固定为该仓库 `master` |
-| `ADMIN_ENTRY_PASSWORD` | 登录必填，秘密 | 你自行设置的后台入口密码，3～10 个字符；后台自动生成加盐 scrypt 哈希进行验证，无需手动加密，建议选择 10 位随机密码。仅在**管理项目**填写，不加 `PUBLIC_` / `VITE_` 前缀，各环境使用不同值 |
-| `ADMIN_ORIGIN` | Production 固定值 | `https://admin.mourn.top`，后台 HTTPS origin，不含末尾 `/` |
-| `PUBLIC_SITE_ORIGIN` | Production 固定值 | `https://blog.mourn.top`，博客 HTTPS origin，不含末尾 `/` |
+| `ADMIN_ENTRY_PASSWORD` | 登录必填，秘密 | 你自行设置的后台入口密码，3～10 个字符；后台自动生成加盐 scrypt 哈希进行验证，无需手动加密，建议选择 10 位随机密码。填在统一 `firefly` 项目，仅服务端读取，不加 `PUBLIC_` / `VITE_` 前缀，各环境使用不同值 |
+| `ADMIN_ORIGIN` | Production 固定值 | `https://blog.mourn.top`，与博客同源，不含末尾 `/` 或 `/admin` |
+| `PUBLIC_SITE_ORIGIN` | Production 固定值 | `https://blog.mourn.top`，与 `ADMIN_ORIGIN` 相同，不含末尾 `/` |
 | `ADMIN_PRODUCTION_DATABASE_URL` | 后台必填，秘密 | Neon 生产 PostgreSQL TLS 连接串，保存草稿、历史、会话、任务和通知。也接受 Marketplace 别名 `DATABASE_URL`，两者无需重复填 |
 | `RESTORE_DATABASE_URL` | 恢复功能需要，秘密 | 独立恢复演练库连接，**数据库名与生产不同**且已应用 001–004 迁移；仅换同名 `neondb` 分支不满足要求 |
 
 数据库连接示意：`postgresql://<用户>:<密码>@<Neon主机>/<数据库名>?sslmode=require`，使用 Neon 提供的值。`/api/health` 正常不证明数据库已连接或迁移完成。
 
-博客作者卡片和手机导航菜单的“后台管理”按钮指向 `https://admin.mourn.top/`。只需输入 `ADMIN_ENTRY_PASSWORD`，正确后直接进入后台，无需用户名或第三方账号。密码未配置、过短或超长时入口关闭。登录自动建立有效 12 小时的数据库会话与 HttpOnly / Secure Cookie；旧 GitHub 登录会话不再有效，须重新输入密码。修改密码并重新部署后旧入口凭证失效；退出登录撤销会话并清除两种 Cookie。密码不写入数据库、Git 或浏览器存储。
+博客“后台管理”入口指向本站 `/admin/`。只需输入 `ADMIN_ENTRY_PASSWORD`，正确后直接进入后台，无需用户名或第三方账号。密码未配置、过短或超长时入口关闭。登录自动建立有效 12 小时的数据库会话与 HttpOnly / Secure Cookie；旧 GitHub 登录会话不再有效，须重新输入密码。修改密码并重新部署后旧入口凭证失效；退出登录撤销会话并清除两种 Cookie。密码不写入数据库、Git 或浏览器存储。
 
-Vercel 保存新变量后，重新部署**管理项目**，现有部署不会自动更新密码。保持 Hobby 免费套餐；免费服务选择及额度约束见 [免费部署说明](./free-deployment.md)。
+Vercel 保存新变量后，重新部署统一 `firefly` 项目，现有部署不会自动更新密码。原 `firefly-admin` 的 Sensitive 值不能由读取工具取回迁移：从原服务或密码管理器填写登录密码、数据库连接、GitHub App 私钥及所需 token，确认已保存到 `firefly` 后再清理旧配置。保持 Hobby 免费套餐；免费服务选择及额度约束见 [免费部署说明](./free-deployment.md)。
 
 `ADMIN_ENTRY_PASSWORD` 直接填写原密码；后台自动添加随机盐并用 scrypt 生成不可逆哈希，登录时异步计算候选哈希并恒定时间比较。原密码仍作为平台秘密变量保存，不会被程序改写成环境变量中的哈希；后台缓存只保留派生值，不额外缓存明文。哈希无需填写，也不作为可用于登录的密码。中文和 emoji 按 Unicode 字符计数，空格保留但全空白密码不允许。
 
-## 管理项目：GitHub 仓库操作
+## GitHub 仓库操作
 
-GitHub App 用于导入、核查仓库与发布文章；密码登录不调用 GitHub，不需要创建 OAuth App。旧的 `ADMIN_GITHUB_USER_ID`、`GITHUB_OAUTH_CLIENT_ID`、`GITHUB_OAUTH_CLIENT_SECRET` 已不读取，可以从管理项目移除。
+GitHub App 用于导入、核查仓库与发布文章；密码登录不调用 GitHub，不需要创建 OAuth App。旧的 `ADMIN_GITHUB_USER_ID`、`GITHUB_OAUTH_CLIENT_ID`、`GITHUB_OAUTH_CLIENT_SECRET` 已不读取，可以从统一项目移除。
 
 | 变量 | 条件 | 填什么 / 从哪里取得 |
 | --- | --- | --- |
@@ -50,13 +50,13 @@ GitHub App 用于导入、核查仓库与发布文章；密码登录不调用 Gi
 
 GitHub App 只安装到 `Nocticur/Firefly`，Contents: read/write、Metadata: read。不要以个人 PAT 代替后台发布身份。Preview 与 Development 使用隔离密码、数据库和管理 origin，不要复制生产 Cookie 或会话。
 
-## 管理项目：Vercel 与 Blob
+## Vercel 与 Blob
 
 | 变量 | 条件 | 填什么 / 从哪里取得 |
 | --- | --- | --- |
-| `VERCEL_TOKEN` | 正式发布核验需要，秘密 | Vercel Access Token，有权读取博客项目、部署及生产别名 |
-| `VERCEL_BLOG_PROJECT_ID` | 同上 | **博客项目** Settings → General → Project ID，通常为 `prj_…`，不是后台项目或 deployment ID |
-| `VERCEL_TEAM_ID` | 团队项目需要 | 所属 Team ID，通常为 `team_…`；个人项目留空 |
+| `VERCEL_TOKEN` | 正式发布核验需要，秘密 | Vercel Access Token，有权读取统一 `firefly` 项目、部署及生产别名 |
+| `VERCEL_BLOG_PROJECT_ID` | 同上 | 保持现有 `firefly` 的 `prj_lIQjUgfWVL6f8XUdyOK7wsttWJZG`；不是旧 `firefly-admin` 项目或 deployment ID |
+| `VERCEL_TEAM_ID` | 团队项目需要 | 现有项目为 `team_09F7sDf0p1hCd9apVLcHC2iU`；在迁移账户时核对实际所属团队 |
 | `VERCEL_AUTOMATION_BYPASS_SECRET` | 可选，秘密 | 博客 Deployment Protection 的自动化绕过秘密，仅保护阻挡清单核验时需要 |
 | `BLOB_PRIVATE_READ_WRITE_TOKEN` | Production 媒体/备份需要，秘密 | **private Blob store** token，保存草稿原图和私有数据库备份 |
 | `BLOB_PUBLIC_READ_WRITE_TOKEN` | Production 媒体发布需要，秘密 | 另一个 **public Blob store** token，保存显式发布的不可变图片/图标 |
@@ -64,7 +64,7 @@ GitHub App 只安装到 `Nocticur/Firefly`，Contents: read/write、Metadata: re
 
 两项 Blob token 须指向两个不同且访问级别正确的 store，单个 `BLOB_READ_WRITE_TOKEN` 不满足要求；轮换同一个 store 的 token 不会形成隔离。当前 `handleUpload` 使用 HMAC 验签，不需要 `BLOB_WEBHOOK_PUBLIC_KEY`。
 
-## 管理项目：互动、邮件与维护
+## 互动、邮件与维护
 
 | 变量 | 条件 | 填什么 / 从哪里取得 |
 | --- | --- | --- |
@@ -73,7 +73,7 @@ GitHub App 只安装到 `Nocticur/Firefly`，Contents: read/write、Metadata: re
 | `ENABLE_PUBLIC_COMMENTS` | 按需 | 默认 `false`；开放评论时设 `true`，同时将 `commentConfig.type` 改为 `nocticur` 并完整重建。友链申请不依赖此开关 |
 | `RESEND_API_KEY` | 正式邮件需要，秘密 | Resend API key，支持发送及本项目的邮件记录查询 |
 | `RESEND_FROM` | 同上 | 已验证发件域/发件人，如 `Nocticur <nocticur@mourn.top>`，不是收件地址或登录邮箱 |
-| `RESEND_WEBHOOK_SECRET` | 同上，秘密 | Resend endpoint `https://admin.mourn.top/api/webhooks/resend` 的 Signing secret，通常为 `whsec_…`，不是 API key |
+| `RESEND_WEBHOOK_SECRET` | 同上，秘密 | Resend endpoint `https://blog.mourn.top/api/webhooks/resend` 的 Signing secret，通常为 `whsec_…`，不是 API key |
 | `CRON_SECRET` | 每日维护需要，秘密 | 自行生成独立的高熵密钥，建议至少 32 随机字节；Vercel 调用 `/api/maintenance/cron` 时发送 Bearer header |
 | `ENABLE_PRODUCTION_PUBLISH` | Production 按需 | `true` 才允许正式发布；初始空值/`false`，按受控验收需求开启 |
 | `ENABLE_PRODUCTION_EMAIL` | Production 按需 | `true` 才允许正式邮件；先验收发件域、回调与幂等 |
@@ -87,7 +87,7 @@ Turnstile action 分别为 `comments` 和 `friend_request`；后台核验 action
 
 | 变量 | 范围 | 指向哪里 |
 | --- | --- | --- |
-| `ADMIN_PREVIEW_ORIGIN` / `PUBLIC_PREVIEW_ORIGIN` | Preview | 隔离后台/博客的精确 HTTPS origin，无末尾 `/` |
+| `ADMIN_PREVIEW_ORIGIN` / `PUBLIC_PREVIEW_ORIGIN` | Preview | 两者填同一个隔离 Preview 的精确 HTTPS origin，无末尾 `/` 或 `/admin` |
 | `ADMIN_PREVIEW_DATABASE_URL` | Preview | 独立 Neon Preview 连接；兼容 `PREVIEW_DATABASE_URL`，不会回退生产连接 |
 | `ADMIN_PREVIEW_PRIVATE_BLOB_TOKEN` / `ADMIN_PREVIEW_PUBLIC_BLOB_TOKEN` | Preview | Preview 专属 private/public stores |
 | `ADMIN_DEV_ORIGIN` / `PUBLIC_DEV_ORIGIN` | 本地 | 默认 `http://localhost:3000` / `http://localhost:4321`；通过 Vite 界面写入时前者显式设为 `http://localhost:5173` |
@@ -95,10 +95,10 @@ Turnstile action 分别为 `comments` 和 `friend_request`；后台核验 action
 | `ADMIN_DEV_PRIVATE_BLOB_TOKEN` / `ADMIN_DEV_PUBLIC_BLOB_TOKEN` | Development | 开发专属 private/public stores |
 | `ADMIN_TEST_DATABASE_URL` | 测试 | 专用测试实例；维护测试角色可创建/删除临时测试库，不得使用生产实例 |
 
-管理 Preview 可用隔离密码与数据库直接登录，必须先配置 `APP_ENV=preview` 和 `ADMIN_PREVIEW_ORIGIN`。互动联调还需独立 Turnstile 小组件和摘要密钥。当前博客 Preview 转发到生产后台，只作静态审阅；可写隔离联调还需独立 API 转发，仅填 Preview origins 不够。
+Preview 同一部署包含博客、后台和 API。可用隔离密码与数据库直接登录，必须先配置 `APP_ENV=preview` 和与实际地址一致的两个 Preview origin。互动联调还需独立 Turnstile 小组件和摘要密钥，不再需要跨项目 API 转发。缺少隔离服务配置时只作静态审阅，不宣称可写联调已完成。
 
 ## 无需手动填写
 
-Vercel 注入 `VERCEL`、`VERCEL_ENV`、`VERCEL_GIT_COMMIT_SHA`，不要手动伪造。构建工具提供 `NODE_ENV`、`DEV`、`PROD`、`BASE_URL`、`SITE`。后台 Build Command 的 `NITRO_PRESET=vercel` 是构建选择。当前不读取 `SESSION_SECRET`、`JWT_SECRET` 或自定义 Workflow token。
+Vercel 注入 `VERCEL`、`VERCEL_ENV`、`VERCEL_GIT_COMMIT_SHA`，不要手动伪造。构建工具提供 `NODE_ENV`、`DEV`、`PROD`、`BASE_URL`、`SITE`。根 `pnpm build:vercel` 脚本设置 `NITRO_PRESET=vercel` 和统一构建选择，无需在平台手动添加。当前不读取 `SESSION_SECRET`、`JWT_SECRET` 或自定义 Workflow token。
 
 四条数据库迁移、Fluid compute、DNS 和 Blob 访问属性是平台设置，不能由额外变量替代。部署步骤见 [deployment.md](./deployment.md)，管理模板见 [apps/admin/.env.example](../../apps/admin/.env.example)。

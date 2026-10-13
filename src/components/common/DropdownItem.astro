@@ -10,6 +10,7 @@ interface Props {
 	isLast?: boolean;
 	class?: string;
 	onclick?: string;
+	reload?: boolean;
 }
 
 const {
@@ -19,6 +20,7 @@ const {
 	isLast = false,
 	class: className,
 	onclick,
+	reload = false,
 } = Astro.props;
 
 const baseClasses =
@@ -28,14 +30,15 @@ const activeClass = isActive ? "current-theme-btn" : "";
 const allClasses =
 	`${baseClasses} ${spacingClass} ${activeClass} ${className || ""}`.trim();
 
-const Tag = href ? "a" : "button";
 ---
 
-<Tag 
-	href={href}
-	target={target}
-	class={allClasses}
-	onclick={onclick}
->
-	<slot />
-</Tag>
+{href ? (
+	<a href={href} target={target} class={allClasses} onclick={onclick}
+		data-astro-reload={reload || undefined} data-no-swup={reload || undefined}>
+		<slot />
+	</a>
+) : (
+	<button class={allClasses} onclick={onclick}>
+		<slot />
+	</button>
+)}

@@ -17,7 +17,7 @@ const base: NavBarConfig = {
 			url: "#",
 			children: [
 				{ name: "番组计划", url: "/bangumi/", pageKey: "bangumi" },
-				{ name: "后台管理", url: "https://admin.mourn.top/", external: true },
+				{ name: "后台管理", url: "/admin/" },
 			],
 		},
 	],
@@ -71,7 +71,7 @@ test("legacy published menus become direct links and preserve retained features 
 	assert.equal(result.links[2].pageKey, "friends");
 	assert.deepEqual(
 		result.links.at(-1)?.children?.map((link) => link.url),
-		["/projects/", "https://github.com/Nocticur", "https://admin.mourn.top/"],
+		["/projects/", "https://github.com/Nocticur", "/admin/"],
 	);
 });
 
@@ -93,7 +93,7 @@ test("retired local routes stay removed after republishing and external referenc
 	);
 	assert.deepEqual(
 		result.links.at(-1)?.children?.map((link) => link.url),
-		["https://docs.example/tags/", "https://admin.mourn.top/"],
+		["https://docs.example/tags/", "/admin/"],
 	);
 	assert.equal(result.links[2].url, "/friends/");
 	assert.deepEqual(
@@ -133,16 +133,17 @@ test("nested retained links flatten into More without losing known optional page
 		[
 			"https://blog.mourn.top/bangumi/",
 			"https://tools.example/",
-			"https://admin.mourn.top/",
+			"/admin/",
 		],
 	);
 });
 
-test("legacy and duplicate admin roots use the canonical working external entry", () => {
+test("legacy and duplicate admin roots use the same-site admin entry without replacing the homepage", () => {
 	const result = organizeNavigation(
 		base,
 		{
 			links: [
+				{ name: "首页", url: "/" },
 				{ name: "旧后台", url: "/admin/" },
 				{ name: "后台管理", url: "https://admin.mourn.top", external: true },
 				{
@@ -164,9 +165,9 @@ test("legacy and duplicate admin roots use the canonical working external entry"
 	assert.equal(additional.filter((link) => link.name === "后台管理").length, 1);
 	assert.deepEqual(additional[0], {
 		name: "后台管理",
-		url: "https://admin.mourn.top/",
-		external: true,
+		url: "/admin/",
 	});
+	assert.equal(result.links[0].url, "/");
 	assert.deepEqual(
 		additional.slice(1).map((link) => link.url),
 		["https://docs.example/", "https://admin.mourn.top/docs"],
