@@ -47,8 +47,8 @@ test("Vercel verification requires target project, actual production alias and b
 	} finally { globalThis.fetch = originalFetch; if (originalProject === undefined) delete process.env.VERCEL_BLOG_PROJECT_ID; else process.env.VERCEL_BLOG_PROJECT_ID = originalProject; }
 });
 
-test("preview publishing is denied before any provider request", () => {
+test("preview publishing is denied before any provider request", async () => {
 	const environment = process.env.APP_ENV; const vercel = process.env.VERCEL_ENV; const enabled = process.env.ENABLE_PRODUCTION_PUBLISH;
-	try { process.env.APP_ENV = "preview"; process.env.VERCEL_ENV = "preview"; process.env.ENABLE_PRODUCTION_PUBLISH = "true"; assert.throws(() => assertPublishCapability(), (error: unknown) => error instanceof ApiFailure && error.status === 403); }
+	try { process.env.APP_ENV = "preview"; process.env.VERCEL_ENV = "preview"; process.env.ENABLE_PRODUCTION_PUBLISH = "true"; await assert.rejects(() => assertPublishCapability(), (error: unknown) => error instanceof ApiFailure && error.status === 403); }
 	finally { for (const [name, value] of [["APP_ENV", environment], ["VERCEL_ENV", vercel], ["ENABLE_PRODUCTION_PUBLISH", enabled]] as const) if (value === undefined) delete process.env[name]; else process.env[name] = value; }
 });

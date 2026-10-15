@@ -412,7 +412,7 @@ class FriendApplication extends HTMLElement {
 			if (signal.aborted) return;
 			form.reset();
 			status.textContent =
-				"申请已提交，等待审核；通过审核并正式上线后将发送邮件通知。";
+				"申请已提交，等待审核；通过审核后将在下次正式发布时上线。";
 		} catch (error) {
 			if (signal.aborted) return;
 			status.textContent = `申请提交失败：${errorMessage(error)}。填写内容已保留。`;

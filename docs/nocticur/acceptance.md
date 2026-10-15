@@ -1,3 +1,5 @@
+> 历史记录：2026-10-15 起后台改用无数据库文件存储。本文中的数据库架构、迁移步骤和旧测试结果不代表当前实现；当前配置见 [environment-variables.md](./environment-variables.md)。
+
 # 验收记录与待完成项
 
 选择 `Nocticur/Firefly`、发布分支 `master`；时间口径为 `Asia/Shanghai`。此表分别记录本地执行结果、测试替身覆盖及真实平台未执行项，不能将本地测试通过视为已上线。

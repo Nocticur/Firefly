@@ -17,21 +17,8 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-bookworm
-        env:
-          POSTGRES_DB: nocticur_admin_test
-          POSTGRES_USER: nocticur
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports: [5432:5432]
-        options: >-
-          --health-cmd "pg_isready -U nocticur -d nocticur_admin_test"
-          --health-interval 10s --health-timeout 5s --health-retries 5
     env:
       APP_ENV: development
-      ADMIN_DEVELOPMENT_DATABASE_URL: postgres://nocticur@localhost:5432/nocticur_admin_test
-      ADMIN_TEST_DATABASE_URL: postgres://nocticur@localhost:5432/nocticur_admin_test
       ASTRO_TELEMETRY_DISABLED: '1'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -45,7 +32,6 @@ jobs:
           node-version: '24.19.0'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @nocticur/admin db:migrate
       - run: pnpm check
       - run: pnpm type-check
       - run: pnpm --filter @nocticur/admin type-check

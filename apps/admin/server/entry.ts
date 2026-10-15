@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, scryptSync } from "node:crypto";
 import { getCookie, setCookie } from "hono/cookie";
 import type { AdminApp } from "./types.js";
-import { getDatabase, getSiteId } from "./db.js";
+import { getStore, getSiteId, type FileStore } from "./file-store.js";
 import { consumeLoginAllowance } from "./login-rate.js";
 import { ApiFailure, constantTimeEqual, managementOrigin, readJson } from "./security.js";
 import { issueSession, SESSION_COOKIE, SESSION_SECONDS } from "./session.js";
@@ -53,7 +53,7 @@ export function requireEntry(request: Request): void {
 	if (!entryVerified(request)) throw new ApiFailure(401, "ENTRY_PASSWORD_REQUIRED", "请先输入管理密码");
 }
 
-export function registerEntryRoutes(app: AdminApp) {
+export function registerEntryRoutes(app: AdminApp, suppliedStore?: FileStore) {
 	app.get("/api/auth/entry", (context) => {
 		context.header("Cache-Control", "no-store");
 		return context.json({ data: { verified: entryVerified(context.req.raw) } });
@@ -64,12 +64,13 @@ export function registerEntryRoutes(app: AdminApp) {
 		if (context.req.header("Origin") !== managementOrigin() || context.req.header("Sec-Fetch-Site") === "cross-site") throw new ApiFailure(403, "ENTRY_ORIGIN_REJECTED", "请从管理页面提交密码");
 		const body = await readJson(context.req.raw, 1024);
 		if (!isAdminPassword(body.password)) throw new ApiFailure(400, "ENTRY_PASSWORD_INVALID", "密码须为 3～10 个字符");
-		await consumeLoginAllowance(getDatabase(), getSiteId(), context.req.raw, config.key.toString("hex"), "entry");
+		const store = suppliedStore || getStore();
+		await consumeLoginAllowance(store, getSiteId(), context.req.raw, config.key.toString("hex"), "entry");
 		if (!await verifyPassword(body.password, config.passwordHash)) {
 			throw new ApiFailure(401, "ENTRY_PASSWORD_INCORRECT", "密码不正确，请重新输入");
 		}
 		const entryToken = issueEntryToken();
-		const session = await issueSession(getDatabase(), getSiteId(), getCookie(context, SESSION_COOKIE));
+		const session = await issueSession(store, getSiteId(), getCookie(context, SESSION_COOKIE));
 		setCookie(context, ENTRY_COOKIE, entryToken, { ...cookieOptions, maxAge: ENTRY_SECONDS });
 		setCookie(context, SESSION_COOKIE, session.token, { ...cookieOptions, maxAge: SESSION_SECONDS });
 		return context.json({ data: { verified: true } });

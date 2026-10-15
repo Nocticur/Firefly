@@ -107,7 +107,7 @@ export const backgroundWallpaper: BackgroundWallpaperConfig = applyManagedWallpa
 				{
 					name: "Email",
 					icon: "fa7-solid:envelope",
-					url: "mailto:nocticur@mourn.top",
+					url: "mailto:youjinmian@outlook.com",
 				},
 				{
 					name: "属于夜幕之人",

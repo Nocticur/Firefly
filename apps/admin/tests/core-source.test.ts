@@ -70,7 +70,8 @@ test("production publication needs both platform environment and explicit server
 		process.env.APP_ENV = "production"; process.env.VERCEL_ENV = "production"; process.env.ENABLE_PRODUCTION_PUBLISH = "false";
 		assert.equal(productionEnvironment(), false);
 		process.env.ENABLE_PRODUCTION_PUBLISH = "true";
-		assert.equal(productionEnvironment(), true);
+		assert.equal(productionEnvironment(), false);
+		assert.equal(productionEnvironment(true), true);
 		process.env.APP_ENV = "development";
 		assert.throws(() => runtimeEnvironment(), /不一致/);
 	} finally {

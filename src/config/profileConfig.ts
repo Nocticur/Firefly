@@ -43,7 +43,7 @@ export const profileConfig: ProfileConfig = applyManagedProfileSettings({
 		{
 			name: "Email",
 			icon: "fa7-solid:envelope",
-			url: "mailto:nocticur@mourn.top",
+			url: "mailto:youjinmian@outlook.com",
 			showName: false,
 		},
 		{

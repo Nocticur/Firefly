@@ -8,7 +8,7 @@ import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
 import { Hono } from "hono";
 import { BlobNotFoundError, type GetBlobResult, type HeadBlobResult } from "@vercel/blob";
-import { createDatabase, getDatabase, getSiteId, type Database } from "../server/db.js";
+import { createMemoryStore, getSiteId, collection, withStore, type FileStore } from "../server/file-store.js";
 import { issueSession } from "../server/auth.js";
 import { entryCookie } from "./entry-fixture.js";
 import { blobToken, isPublicAddress, publishMediaForSnapshot, registerMediaRoutes, safeMediaType, validateImportUrl, type FrozenMedia, type MediaPublicationOptions } from "../server/media.js";
@@ -39,14 +39,10 @@ function publicPath(media: FrozenMedia, selectedSite = site): string {
 	return `published/${hash(selectedSite).slice(0, 16)}/${media.id}/${media.digest}.png`;
 }
 
-function recordingDatabase(): { db: Database; queries: Array<{ sql: string; params: unknown[] }> } {
-	const queries: Array<{ sql: string; params: unknown[] }> = [];
-	const db: Database = {
-		async query(sql, params = []) { queries.push({ sql, params }); return []; },
-		async transaction(run) { return run(db); },
-		async close() {},
-	};
-	return { db, queries };
+function recordingStore(): { store: FileStore; updates: number[] } {
+	const memory = createMemoryStore(site); const updates: number[] = [];
+	const store: FileStore = { read: () => memory.read(), async update(run) { updates.push(updates.length); return memory.update(run); } };
+	return { store, updates };
 }
 
 type BlobObject = { bytes: Buffer; contentType: string };
@@ -146,14 +142,14 @@ test("media import rejects disallowed URLs before DNS and rejects any private DN
 			addresses = [{ address: "8.8.8.8", family: 4 }, { address: "127.0.0.1", family: 4 }];
 			await assert.rejects(() => validateImportUrl("https://allowed.invalid/a.png"), failure("MEDIA_IMPORT_ADDRESS_DENIED", 400));
 		});
-		await environment({ MEDIA_IMPORT_HOSTS: undefined }, () => assert.rejects(() => validateImportUrl("https://allowed.invalid/a.png"), failure("MEDIA_IMPORT_HOSTS_REQUIRED", 503)));
+		await environment({ MEDIA_IMPORT_HOSTS: undefined }, () => assert.rejects(() => validateImportUrl("https://allowed.invalid/a.png"), failure("MEDIA_IMPORT_HOST_DENIED", 400)));
 	} finally { lookupMock.mock.restore(); syncBuiltinESMExports(); }
 	for (const address of ["127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "198.18.0.1", "192.88.99.1", "::1", "::ffff:127.0.0.1", "fe80::1", "fc00::1", "2001:db8::1", "2001:2::1", "3fff::1"]) assert.equal(isPublicAddress(address), false, address);
 	for (const address of ["8.8.8.8", "198.51.0.1", "203.0.1.1", "2606:4700:4700::1111"]) assert.equal(isPublicAddress(address), true, address);
 });
 
 test("media routes deny anonymous and Blob-token requests before intent creation or private reads", async () => {
-	await environment({ ...testTokens, ADMIN_DEVELOPMENT_DATABASE_URL: undefined, ADMIN_DATABASE_URL: undefined }, async () => {
+	await environment(testTokens, async () => {
 		const app = new Hono<AppEnv>();
 		app.onError((error, context) => error instanceof ApiFailure ? error.getResponse() : context.json({ error: { code: "UNEXPECTED" } }, 500));
 		registerMediaRoutes(app);
@@ -169,8 +165,8 @@ test("media routes deny anonymous and Blob-token requests before intent creation
 
 test("snapshot publication copies frozen bytes once and re-verifies private and public bytes on retry", async () => {
 	await environment(testTokens, async () => {
-		const media = frozen(); const objects = storage(media); const { db, queries } = recordingDatabase();
-		const options = { db, site, frozenMedia: { [media.id]: media }, blob: objects.blob };
+		const media = frozen(); const objects = storage(media); const { store, updates } = recordingStore();
+		const options = { store, site, frozenMedia: { [media.id]: media }, blob: objects.blob };
 		const expected = `https://test.public.blob.vercel-storage.com/${publicPath(media)}`;
 		assert.deepEqual(await publishMediaForSnapshot([media.id, media.id], "first-task", options), { [media.id]: expected });
 		assert.deepEqual(await publishMediaForSnapshot([media.id], "retry-task", options), { [media.id]: expected });
@@ -180,19 +176,15 @@ test("snapshot publication copies frozen bytes once and re-verifies private and 
 		assert.deepEqual(objects.privateObjects.get(media.pathname)?.bytes, png);
 		assert.equal(objects.reads.filter((read) => read.access === "private").length, 2);
 		assert.equal(objects.reads.filter((read) => read.access === "public").length, 2);
-		assert.equal(queries.length, 2, "frozen publication must not re-read mutable draft metadata");
-		for (const query of queries) {
-			assert.match(query.sql, /^UPDATE entities /);
-			assert.match(query.sql, /revision=\$4/);
-			assert.deepEqual(query.params, [site, media.id, expected, media.revision, media.pathname, media.digest]);
-		}
+		assert.equal(updates.length, 2, "frozen publication must not re-read mutable draft metadata");
+		assert.equal(Object.keys(collection(await store.read(), "entities")).length, 0, "publication must not recreate deleted draft records");
 	});
 });
 
 test("lost PUT response reconciles stored bytes without another public write", async () => {
 	await environment(testTokens, async () => {
 		const media = frozen(); const objects = storage(media); objects.losePutResponse();
-		const { db } = recordingDatabase(); const options = { db, site, frozenMedia: { [media.id]: media }, blob: objects.blob };
+		const { store } = recordingStore(); const options = { store, site, frozenMedia: { [media.id]: media }, blob: objects.blob };
 		const result = await publishMediaForSnapshot([media.id], "task", options);
 		assert.equal(result[media.id], `https://test.public.blob.vercel-storage.com/${publicPath(media)}`);
 		assert.deepEqual(await publishMediaForSnapshot([media.id], "task", options), result);
@@ -203,62 +195,62 @@ test("lost PUT response reconciles stored bytes without another public write", a
 
 test("existing public bytes are checked even when an earlier publication already succeeded", async () => {
 	await environment(testTokens, async () => {
-		const media = frozen(); const objects = storage(media); const { db, queries } = recordingDatabase();
-		const options = { db, site, frozenMedia: { [media.id]: media }, blob: objects.blob };
+		const media = frozen(); const objects = storage(media); const { store, updates } = recordingStore();
+		const options = { store, site, frozenMedia: { [media.id]: media }, blob: objects.blob };
 		await publishMediaForSnapshot([media.id], "task", options);
 		const tampered = Buffer.from(png); tampered[tampered.length - 1] ^= 1;
 		objects.publicObjects.set(publicPath(media), { bytes: tampered, contentType: media.contentType });
 		await assert.rejects(() => publishMediaForSnapshot([media.id], "retry", options), failure("PUBLISHED_MEDIA_CONFLICT", 409));
 		assert.equal(objects.writes.length, 1);
-		assert.equal(queries.length, 1, "a conflict must not update publication metadata");
+		assert.equal(updates.length, 1, "a conflict must not update publication metadata");
 	});
 });
 
 test("a valid existing public copy does not bypass verification of changed private bytes", async () => {
 	await environment(testTokens, async () => {
-		const media = frozen(); const objects = storage(media); const { db, queries } = recordingDatabase();
-		const options = { db, site, frozenMedia: { [media.id]: media }, blob: objects.blob };
+		const media = frozen(); const objects = storage(media); const { store, updates } = recordingStore();
+		const options = { store, site, frozenMedia: { [media.id]: media }, blob: objects.blob };
 		await publishMediaForSnapshot([media.id], "task", options);
 		const changed = Buffer.from(png); changed[changed.length - 1] ^= 1;
 		objects.privateObjects.set(media.pathname, { bytes: changed, contentType: media.contentType });
 		await assert.rejects(() => publishMediaForSnapshot([media.id], "retry", options), failure("MEDIA_CHANGED", 409));
-		assert.equal(objects.writes.length, 1); assert.equal(queries.length, 1);
+		assert.equal(objects.writes.length, 1); assert.equal(updates.length, 1);
 	});
 });
 
 test("snapshot publication rejects invalid frozen records and unsafe content before a public write", async () => {
 	await environment(testTokens, async () => {
-		const missing = frozen(); const missingStorage = storage(missing); const missingDatabase = recordingDatabase();
-		await assert.rejects(() => publishMediaForSnapshot([missing.id], "task", { db: missingDatabase.db, site, blob: missingStorage.blob }), failure("FROZEN_MEDIA_INVALID", 409));
-		assert.equal(missingDatabase.queries.length, 0); assert.equal(missingStorage.reads.length, 0);
+		const missing = frozen(); const missingStorage = storage(missing); const missingStore = recordingStore();
+		await assert.rejects(() => publishMediaForSnapshot([missing.id], "task", { store: missingStore.store, site, blob: missingStorage.blob }), failure("FROZEN_MEDIA_INVALID", 409));
+		assert.equal(missingStore.updates.length, 0); assert.equal(missingStorage.reads.length, 0);
 		for (const invalid of [{ pathname: "" }, { contentType: "text/html" }, { contentType: "toString" }, { contentType: "constructor" }, { digest: "wrong" }, { size: 0 }, { revision: 0 }, { revision: 1.5 }]) {
-			const media = frozen(invalid); const objects = storage(media); const { db, queries } = recordingDatabase();
-			await assert.rejects(() => publishMediaForSnapshot([media.id], "task", { db, site, frozenMedia: { [media.id]: media }, blob: objects.blob }), failure("FROZEN_MEDIA_INVALID", 409));
-			assert.equal(objects.reads.length, 0); assert.equal(objects.writes.length, 0); assert.equal(queries.length, 0);
+			const media = frozen(invalid); const objects = storage(media); const { store, updates } = recordingStore();
+			await assert.rejects(() => publishMediaForSnapshot([media.id], "task", { store, site, frozenMedia: { [media.id]: media }, blob: objects.blob }), failure("FROZEN_MEDIA_INVALID", 409));
+			assert.equal(objects.reads.length, 0); assert.equal(objects.writes.length, 0); assert.equal(updates.length, 0);
 		}
 		for (const [bytes, contentType, code] of [[Buffer.from('<svg><script>alert(1)</script></svg>'), "image/svg+xml", "UNSAFE_SVG"], [Buffer.from("<html>not an image</html>"), "image/png", "UNSUPPORTED_MEDIA"]] as const) {
-			const media = frozen({ size: bytes.length, digest: hash(bytes), contentType }); const objects = storage(media, bytes); const { db, queries } = recordingDatabase();
-			await assert.rejects(() => publishMediaForSnapshot([media.id], "task", { db, site, frozenMedia: { [media.id]: media }, blob: objects.blob }), failure(code, 415));
-			assert.equal(objects.writes.length, 0); assert.equal(queries.length, 0);
+			const media = frozen({ size: bytes.length, digest: hash(bytes), contentType }); const objects = storage(media, bytes); const { store, updates } = recordingStore();
+			await assert.rejects(() => publishMediaForSnapshot([media.id], "task", { store, site, frozenMedia: { [media.id]: media }, blob: objects.blob }), failure(code, 415));
+			assert.equal(objects.writes.length, 0); assert.equal(updates.length, 0);
 		}
 	});
 });
 
-const databaseUrl = process.env.ADMIN_TEST_DATABASE_URL;
-test("authenticated media validation rejects inherited MIME names and HTTPS redirects with a pinned address", { skip: !databaseUrl }, async (t) => {
-	await environment({ ...testTokens, ADMIN_DEVELOPMENT_DATABASE_URL: databaseUrl, ADMIN_DEV_ORIGIN: "http://localhost:3000", GITHUB_REPOSITORY: `tests/media-auth-${randomUUID()}`, MEDIA_IMPORT_HOSTS: "allowed.invalid" }, async () => {
-		const db = getDatabase(); const selectedSite = getSiteId();
+test("authenticated media validation rejects inherited MIME names and HTTPS redirects with a pinned address", async (t) => {
+	await environment({ ...testTokens, ADMIN_DEV_ORIGIN: "http://localhost:3000", GITHUB_REPOSITORY: `tests/media-auth-${randomUUID()}`, MEDIA_IMPORT_HOSTS: "allowed.invalid" }, async () => {
+		const selectedSite = getSiteId(); const store = createMemoryStore(selectedSite);
 		try {
-			const session = await issueSession(db, selectedSite);
+			const session = await issueSession(store, selectedSite);
 			const headers = { Cookie: `__Host-admin-session=${session.token}; ${entryCookie()}`, Origin: "http://localhost:3000", "Content-Type": "application/json", "x-csrf-token": session.csrfToken };
 			const app = new Hono<AppEnv>();
+			app.use("*", (_context, next) => withStore(store, next));
 			app.onError((error, context) => error instanceof ApiFailure ? error.getResponse() : context.json({ error: { code: "UNEXPECTED" } }, 500));
 			registerMediaRoutes(app);
 			for (const contentType of ["toString", "constructor", "text/html"]) {
 				const response = await app.request("http://localhost:3000/api/media/intents", { method: "POST", headers, body: JSON.stringify({ name: "file.png", contentType, size: png.length }) });
 				assert.equal(response.status, 400, contentType); assert.equal((await response.json()).error.code, "INVALID_UPLOAD");
 			}
-			assert.equal((await db.query("SELECT id FROM media_upload_intents WHERE site_id=$1", [selectedSite])).length, 0);
+			assert.equal(Object.keys(collection(await store.read(), "media_upload_intents")).length, 0);
 			let httpsRequests = 0; let redirectDestroyed = false;
 			const lookupMock = t.mock.method(dns, "lookup", async () => [{ address: "8.8.8.8", family: 4 }]);
 			const requestMock = t.mock.method(https, "request", (url: URL, options: RequestOptions, callback: (response: IncomingMessage) => void) => {
@@ -275,30 +267,27 @@ test("authenticated media validation rejects inherited MIME names and HTTPS redi
 				const response = await app.request("http://localhost:3000/api/media/import", { method: "POST", headers, body: JSON.stringify({ url: "https://allowed.invalid/a.png" }) });
 				assert.equal(response.status, 400); assert.equal((await response.json()).error.code, "MEDIA_IMPORT_FAILED");
 				assert.equal(httpsRequests, 1); assert.equal(redirectDestroyed, true);
-				assert.equal((await db.query("SELECT id FROM entities WHERE site_id=$1 AND kind='media'", [selectedSite])).length, 0);
+				assert.equal(Object.values(collection(await store.read(), "entities")).filter((row) => row.kind === "media").length, 0);
 			} finally { lookupMock.mock.restore(); requestMock.mock.restore(); syncBuiltinESMExports(); }
-		} finally {
-			for (const table of ["entities", "sessions", "media_upload_intents"]) await db.query(`DELETE FROM ${table} WHERE site_id=$1`, [selectedSite]);
-			await db.close();
-		}
+		} finally { /* The isolated in-memory fixture needs no external cleanup. */ }
 	});
 });
 
-test("PostgreSQL publication preserves edited and deleted drafts while publishing the frozen object", { skip: !databaseUrl }, async (t) => {
+test("flat-file publication preserves edited and deleted drafts while publishing the frozen object", async (t) => {
 	await environment(testTokens, async () => {
-		const db = createDatabase(databaseUrl!); const selectedSite = `tests/media-${randomUUID()}:development`;
+		const selectedSite = `tests/media-${randomUUID()}:development`; const store = createMemoryStore(selectedSite);
 		try {
 			for (const [name, currentPatch, currentRevision] of [["later edit", { alt: "later private edit", pathname: "drafts/new-private.png", digest: hash("new draft"), publishedUrl: "https://existing.invalid/new-draft.png" }, 2], ["deleted tombstone", { deleted: true }, 1], ["matching revision", {}, 1]] as const) await t.test(name, async () => {
 				const media = frozen(); const current = { ...media, ...currentPatch }; delete (current as Partial<FrozenMedia>).revision;
-				await db.query("INSERT INTO entities(site_id,kind,id,data,revision) VALUES($1,'media',$2,$3::jsonb,$4)", [selectedSite, media.id, JSON.stringify(current), currentRevision]);
+				await store.update((state) => { collection(state, "entities")[`media:${media.id}`] = { id: media.id, kind: "media", data: current, revision: currentRevision }; });
 				const objects = storage(media);
-				const result = await publishMediaForSnapshot([media.id], "task", { db, site: selectedSite, frozenMedia: { [media.id]: media }, blob: objects.blob });
+				const result = await publishMediaForSnapshot([media.id], "task", { store, site: selectedSite, frozenMedia: { [media.id]: media }, blob: objects.blob });
 				assert.equal(objects.writes[0].pathname, publicPath(media, selectedSite)); assert.deepEqual(objects.writes[0].bytes, png);
 				assert.deepEqual(objects.reads[0], { pathname: media.pathname, access: "private" });
-				const [stored] = await db.query<{ data: Record<string, unknown>; revision: number | string }>("SELECT data,revision FROM entities WHERE site_id=$1 AND kind='media' AND id=$2", [selectedSite, media.id]);
+				const stored = collection(await store.read(), "entities")[`media:${media.id}`]!;
 				assert.equal(Number(stored.revision), currentRevision);
 				assert.deepEqual(stored.data, name === "matching revision" ? { ...current, publishedUrl: result[media.id] } : current);
 			});
-		} finally { await db.query("DELETE FROM entities WHERE site_id=$1", [selectedSite]); await db.close(); }
+		} finally { /* Private state is isolated to this fixture. */ }
 	});
 });

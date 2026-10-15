@@ -10,7 +10,7 @@ const inputClass = "w-full px-3 py-2.5 rounded-xl border border-(--line-divider)
     <div class="page-icon" aria-hidden="true"><Icon name="material-symbols:edit-note-rounded" /></div>
     <div>
       <h2>在线申请友链</h2>
-      <p>添加本站友链后填写申请，审核通过并正式上线后将发送邮件通知。</p>
+      <p>添加本站友链后填写申请，审核通过后将在下次正式发布时上线。</p>
     </div>
   </div>
   <form data-friend-application>
@@ -34,7 +34,7 @@ const inputClass = "w-full px-3 py-2.5 rounded-xl border border-(--line-divider)
       <label class="flex flex-col gap-2 text-sm">
         <span>联系邮箱 <span aria-hidden="true">*</span></span>
         <input name="email" type="email" required maxlength="254" autocomplete="email" class={inputClass} />
-        <span class="text-xs text-neutral-500 dark:text-neutral-400">用于审核及上线通知，不会公开展示。</span>
+        <span class="text-xs text-neutral-500 dark:text-neutral-400">用于必要时联系你，不会公开展示。</span>
       </label>
     </fieldset>
     <div data-turnstile class="mt-4" />

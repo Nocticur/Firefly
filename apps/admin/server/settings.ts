@@ -1,7 +1,8 @@
 import type { AdminApp } from "./types.js";
 import { requireAdmin } from "./auth.js";
-import { getDatabase, getSiteId, type Database } from "./db.js";
+import { assertSite, collection, getStore, getSiteId, type FileStore } from "./file-store.js";
 import { ApiFailure, expectedRevision, readJson } from "./security.js";
+import { readServiceSettings, saveServiceSettings } from "./service-settings.js";
 
 export const MANAGED_SETTING_KEYS = ["title", "subtitle", "description", "siteUrl", "siteStartDate", "timezone", "profileName", "bio", "avatar", "contactLinks", "homeCover", "defaultCover", "background"] as const;
 const keySet = new Set<string>(MANAGED_SETTING_KEYS);
@@ -72,34 +73,42 @@ export function validateNavigation(patch: Record<string, unknown>) {
 	};
 	visit(patch.links, 0);
 }
-export async function getManagedEntity(database: Database, siteId: string, kind: "settings" | "navigation" | "icons") {
-	const [row] = await database.query<SettingsRow>("SELECT data,revision FROM entities WHERE site_id=$1 AND kind=$2 AND id='default'", [siteId, kind]);
+export async function getManagedEntity(store: FileStore, siteId: string, kind: "settings" | "navigation" | "icons") {
+	const state = await store.read(); assertSite(state, siteId);
+	const row = collection(state, "entities")[`${kind}:default`] as SettingsRow | undefined;
 	if (!row) throw new ApiFailure(503, "BASELINE_IMPORT_REQUIRED", "请先从 GitHub 导入现有站点配置基线");
 	return { data: row.data, revision: Number(row.revision) };
 }
-export async function saveManagedEntity(database: Database, siteId: string, kind: "settings" | "navigation" | "icons", patch: Record<string, unknown>, expected: number) {
+export async function saveManagedEntity(store: FileStore, siteId: string, kind: "settings" | "navigation" | "icons", patch: Record<string, unknown>, expected: number) {
 	if (kind === "settings") validateSettingsPatch(patch);
 	else if (kind === "navigation") validateNavigation(patch);
 	else for (const [filename, reference] of Object.entries(patch)) {
 		if (!ICON_FILENAMES.has(filename)) throw new ApiFailure(422, "ICON_FILENAME_INVALID", `不支持图标位 ${filename}`);
 		validateManagedUrl(reference, filename, true);
 	}
-	return database.transaction(async (tx) => {
-		const [row] = await tx.query<SettingsRow>("SELECT data,revision FROM entities WHERE site_id=$1 AND kind=$2 AND id='default' FOR UPDATE", [siteId, kind]);
+	return store.update((state) => {
+		assertSite(state, siteId);
+		const entities = collection(state, "entities");
+		const row = entities[`${kind}:default`] as SettingsRow | undefined;
 		if (!row) throw new ApiFailure(503, "BASELINE_IMPORT_REQUIRED", "请先导入站点配置基线");
 		if (Number(row.revision) !== expected) throw new ApiFailure(409, "REVISION_CONFLICT", "设置已被另一次保存修改", { currentRevision: Number(row.revision) });
 		const data = { ...row.data, ...patch };
-		await tx.query("UPDATE entities SET data=$3::jsonb,revision=revision+1,updated_at=now() WHERE site_id=$1 AND kind=$2 AND id='default'", [siteId, kind, JSON.stringify(data)]);
+		entities[`${kind}:default`] = { ...row, data, revision: expected + 1, updated_at: new Date().toISOString() };
 		return { data, revision: expected + 1 };
 	});
 }
 export function registerSettingsRoutes(app: AdminApp) {
+	app.get("/api/service-settings", requireAdmin, async (context) => context.json(await readServiceSettings()));
+	app.put("/api/service-settings", requireAdmin, async (context) => {
+		const body = await readJson(context.req.raw, 4096);
+		return context.json(await saveServiceSettings(getStore(), getSiteId(), body.data, expectedRevision(body.expectedRevision)));
+	});
 	for (const kind of ["settings", "navigation", "icons"] as const) {
-		app.get(`/api/${kind}`, requireAdmin, async (context) => context.json(await getManagedEntity(getDatabase(), getSiteId(), kind)));
+		app.get(`/api/${kind}`, requireAdmin, async (context) => context.json(await getManagedEntity(getStore(), getSiteId(), kind)));
 		app.put(`/api/${kind}`, requireAdmin, async (context) => {
 			const body = await readJson(context.req.raw, 128 * 1024);
 			if (!isRecord(body.data)) throw new ApiFailure(422, "SETTING_DATA_REQUIRED", "必须提供 data 对象");
-			return context.json(await saveManagedEntity(getDatabase(), getSiteId(), kind, body.data, expectedRevision(body.expectedRevision)));
+			return context.json(await saveManagedEntity(getStore(), getSiteId(), kind, body.data, expectedRevision(body.expectedRevision)));
 		});
 	}
 }

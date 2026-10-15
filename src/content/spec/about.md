@@ -12,7 +12,7 @@ Nocticur的博客，记录个人学习、工作、AI相关的内容。
 - GitHub：[Nocticur](https://github.com/Nocticur)
 - B站：[属于夜幕之人](https://space.bilibili.com/645892937)
 - QQ群：[源站群聊入口](https://qm.qq.com/q/2R07cjGTZ0)
-- 邮箱：[nocticur@mourn.top](mailto:nocticur@mourn.top)
+- 邮箱：[youjinmian@outlook.com](mailto:youjinmian@outlook.com)
 
 ## 🛠️ 关于本站
 

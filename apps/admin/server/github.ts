@@ -26,8 +26,24 @@ function appJwt(): string {
 async function installationToken(write: boolean): Promise<string> {
 	let response: Response;
 	const authorization = `Bearer ${appJwt()}`;
+	let installationId = process.env.GITHUB_INSTALLATION_ID;
+	if (!installationId) {
+		try {
+			const installation = await fetch("https://api.github.com/repos/Nocticur/Firefly/installation", {
+				headers: { Authorization: authorization, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+				redirect: "error", signal: AbortSignal.timeout(20_000),
+			});
+			if (!installation.ok) throw new GitHubError(installation.status, "GitHub App must be installed on Nocticur/Firefly");
+			const data = await installation.json() as { id?: unknown };
+			if (typeof data?.id !== "number" || !Number.isSafeInteger(data.id) || data.id <= 0) throw new GitHubError(502, "GitHub returned an invalid installation ID");
+			installationId = String(data.id);
+		} catch (error) {
+			if (error instanceof GitHubError) throw error;
+			throw new GitHubError(502, "GitHub repository installation lookup failed");
+		}
+	}
 	try {
-		response = await fetch(`https://api.github.com/app/installations/${encodeURIComponent(required("GITHUB_INSTALLATION_ID"))}/access_tokens`, {
+		response = await fetch(`https://api.github.com/app/installations/${encodeURIComponent(installationId)}/access_tokens`, {
 			method: "POST", headers: { Authorization: authorization, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
 			body: JSON.stringify({ repositories: ["Firefly"], permissions: { contents: write ? "write" : "read" } }), signal: AbortSignal.timeout(20_000),
 		});

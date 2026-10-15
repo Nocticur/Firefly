@@ -5,27 +5,17 @@ import { request as httpsRequest } from "node:https";
 import { get, head, put } from "@vercel/blob";
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { authenticateRequest, requireAdmin } from "./auth.js";
-import { getDatabase, getSiteId, type Database } from "./db.js";
-import { ApiFailure, readJson, runtimeEnvironment } from "./security.js";
+import { getStore, getSiteId, collection, assertSite, type FileStore } from "./file-store.js";
+import { blobToken } from "./storage-config.js";
+export { blobToken } from "./storage-config.js";
+import { ApiFailure, readJson } from "./security.js";
 import type { AdminApp } from "./types.js";
+import { defaultMediaImportHosts } from "./runtime-config.js";
 
 export const MAX_MEDIA_SIZE = 32 * 1024 * 1024;
 const EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/avif": "avif", "image/svg+xml": "svg", "image/x-icon": "ico", "image/vnd.microsoft.icon": "ico" };
 type Media = Record<string, unknown> & { id: string; pathname: string; name: string; contentType: string; size: number; ownerId: string; alt: string; caption: string; digest: string; createdAt: string; deleted?: boolean; publishedUrl?: string };
-type Intent = Record<string, unknown> & { id: string; owner_id: string; pathname: string; name: string; content_type: string; size: number; state: string; expires_at: Date };
-
-export function blobToken(access: "private" | "public"): string {
-	const environment = runtimeEnvironment();
-	const key = environment === "production" ? `BLOB_${access.toUpperCase()}_READ_WRITE_TOKEN` : `ADMIN_${environment === "preview" ? "PREVIEW" : "DEV"}_${access.toUpperCase()}_BLOB_TOKEN`;
-	const token = process.env[key];
-	if (!token) throw new ApiFailure(503, "BLOB_CONFIGURATION_REQUIRED", `缺少隔离存储配置 ${key}`);
-	const storeId = (value?: string) => value?.startsWith("vercel_blob_rw_") ? value.split("_")[3] : undefined;
-	if (environment !== "production" && [process.env.BLOB_PRIVATE_READ_WRITE_TOKEN, process.env.BLOB_PUBLIC_READ_WRITE_TOKEN].some((production) => production === token || Boolean(storeId(token) && storeId(production) === storeId(token)))) throw new ApiFailure(503, "BLOB_ENVIRONMENT_NOT_ISOLATED", "开发及预览存储必须与生产隔离");
-	const peerKey = key.replace(access.toUpperCase(), access === "private" ? "PUBLIC" : "PRIVATE");
-	const peer = process.env[peerKey];
-	if (peer === token || Boolean(storeId(token) && storeId(peer) === storeId(token))) throw new ApiFailure(503, "BLOB_STORES_NOT_SEPARATE", "私有与公开媒体必须使用不同存储");
-	return token;
-}
+type Intent = Record<string, unknown> & { id: string; owner_id: string; pathname: string; name: string; content_type: string; size: number; state: string; expires_at: string };
 
 export function safeMediaType(bytes: Uint8Array): string {
 	const b = Buffer.from(bytes);
@@ -50,8 +40,7 @@ export function publicMedia(record: Media) {
 	return { id: record.id, pathname: record.pathname, name: record.name, contentType: record.contentType, size: record.size, access: "private", alt: record.alt, caption: record.caption, createdAt: record.createdAt, contentUrl: `/api/media/${record.id}/content`, ...(record.publishedUrl ? { publishedUrl: record.publishedUrl } : {}) };
 }
 async function mediaById(id: string): Promise<Media> {
-	const rows = await getDatabase().query<{ data: Media }>("SELECT data FROM entities WHERE site_id=$1 AND kind='media' AND id=$2", [getSiteId(), id]);
-	const media = rows[0]?.data;
+	const media = collection(await getStore().read(), "entities")[`media:${id}`]?.data as Media | undefined;
 	if (!media || media.deleted) throw new ApiFailure(404, "MEDIA_NOT_FOUND", "媒体不存在");
 	return media;
 }
@@ -61,7 +50,7 @@ async function readStream(stream: ReadableStream<Uint8Array>, limit = MAX_MEDIA_
 	return Buffer.concat(chunks);
 }
 async function persistMedia(media: Media): Promise<void> {
-	await getDatabase().query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,'media',$2,$3::jsonb) ON CONFLICT(site_id,kind,id) DO NOTHING", [getSiteId(), media.id, JSON.stringify(media)]);
+	await getStore().update((state) => { const now = new Date().toISOString(); collection(state, "entities")[`media:${media.id}`] ||= { id: media.id, kind: "media", data: media, revision: 1, created_at: now, updated_at: now }; });
 }
 
 export function isPublicAddress(address: string): boolean {
@@ -78,7 +67,7 @@ export function isPublicAddress(address: string): boolean {
 }
 export async function validateImportUrl(raw: string): Promise<{ url: URL; address: string; family: number }> {
 	let url: URL; try { url = new URL(raw); } catch { throw new ApiFailure(400, "INVALID_MEDIA_URL", "媒体地址无效"); }
-	const hosts = (process.env.MEDIA_IMPORT_HOSTS || "").split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
+	const hosts = defaultMediaImportHosts();
 	if (!hosts.length) throw new ApiFailure(503, "MEDIA_IMPORT_HOSTS_REQUIRED", "先配置外链导入允许的域名");
 	if (url.protocol !== "https:" || url.username || url.password || url.port || url.hash || isIP(url.hostname) || !hosts.includes(url.hostname.toLowerCase())) throw new ApiFailure(400, "MEDIA_IMPORT_HOST_DENIED", "外链须使用允许域名的 HTTPS 地址");
 	const addresses = await lookup(url.hostname, { all: true });
@@ -122,11 +111,11 @@ export async function importBytes(raw: string, options: ImportOptions = {}): Pro
 }
 
 export type FrozenMedia = Record<string, unknown> & { id: string; pathname: string; digest: string; size: number; contentType: string; revision: number };
-export type MediaPublicationOptions = { db?: Database; site?: string; frozenMedia?: Record<string, FrozenMedia>; blob?: { get: typeof get; head: typeof head; put: typeof put } };
+export type MediaPublicationOptions = { store?: FileStore; site?: string; frozenMedia?: Record<string, FrozenMedia>; blob?: { get: typeof get; head: typeof head; put: typeof put } };
 
 export async function publishMediaForSnapshot(ids: string[], _taskId: string, options: MediaPublicationOptions = {}): Promise<Record<string, string>> {
 	if (ids.length && !options.frozenMedia) throw new ApiFailure(409, "FROZEN_MEDIA_INVALID", "发布必须使用已冻结的媒体清单");
-	const db = options.db || getDatabase(); const site = options.site || getSiteId();
+	const store = options.store || getStore(); const site = options.site || getSiteId();
 	const storage = options.blob || { get, head, put };
 	const token = blobToken("public"); const privateToken = blobToken("private"); const urls: Record<string, string> = {};
 	for (const id of [...new Set(ids)]) {
@@ -156,7 +145,10 @@ export async function publishMediaForSnapshot(ids: string[], _taskId: string, op
 			if (!url) throw new ApiFailure(409, "PUBLISHED_MEDIA_UNVERIFIED", "公开媒体尚未通过读取核验");
 		}
 		// Publication metadata may only update the matching draft revision.
-		await db.query("UPDATE entities SET data=jsonb_set(data,'{publishedUrl}',to_jsonb($3::text)),updated_at=now() WHERE site_id=$1 AND kind='media' AND id=$2 AND revision=$4 AND data->>'pathname'=$5 AND data->>'digest'=$6 AND coalesce((data->>'deleted')::boolean,false)=false", [site, id, url, media.revision, media.pathname, media.digest]);
+		await store.update((state) => {
+			assertSite(state, site); const row = collection(state, "entities")[`media:${id}`]; const current = row?.data as Media | undefined;
+			if (row && current && row.revision === media.revision && current.pathname === media.pathname && current.digest === media.digest && !current.deleted) { current.publishedUrl = url; row.updated_at = new Date().toISOString(); }
+		});
 		urls[id] = url;
 	}
 	return urls;
@@ -164,14 +156,14 @@ export async function publishMediaForSnapshot(ids: string[], _taskId: string, op
 
 export function registerMediaRoutes(app: AdminApp): void {
 	app.get("/api/media", requireAdmin, async (c) => {
-		const rows = await getDatabase().query<{ data: Media }>("SELECT data FROM entities WHERE site_id=$1 AND kind='media' AND coalesce((data->>'deleted')::boolean,false)=false ORDER BY created_at DESC", [getSiteId()]);
+		const rows = Object.values(collection(await getStore().read(), "entities")).filter((row) => row.kind === "media" && !(row.data as Media).deleted).sort((a,b) => String(b.created_at).localeCompare(String(a.created_at))) as Array<{ data: Media }>;
 		return c.json({ data: rows.map((row) => publicMedia(row.data)) });
 	});
 	app.post("/api/media/intents", requireAdmin, async (c) => {
 		blobToken("private"); const body = await readJson(c.req.raw); const name = String(body.name || ""); const contentType = String(body.contentType || ""); const size = Number(body.size);
 		if (!name || name.length > 255 || !Object.hasOwn(EXTENSIONS, contentType) || !Number.isSafeInteger(size) || size < 1 || size > MAX_MEDIA_SIZE) throw new ApiFailure(400, "INVALID_UPLOAD", "文件名、类型或大小不合法");
 		const id = randomUUID(); const pathname = `drafts/${createHash("sha256").update(getSiteId()).digest("hex").slice(0,16)}/${c.get("user").id}/${id}.${EXTENSIONS[contentType]}`;
-		await getDatabase().query("INSERT INTO media_upload_intents(site_id,id,owner_id,pathname,name,content_type,size,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '30 minutes')", [getSiteId(), id, c.get("user").id, pathname, name, contentType, size]);
+		await getStore().update((state) => { collection(state, "media_upload_intents")[id] = { id, owner_id: c.get("user").id, pathname, name, content_type: contentType, size, state: "pending", expires_at: new Date(Date.now()+30*60*1000).toISOString() }; });
 		return c.json({ data: { id, pathname } }, 201);
 	});
 	app.post("/api/media/upload", async (c) => {
@@ -181,14 +173,14 @@ export function registerMediaRoutes(app: AdminApp): void {
 			onBeforeGenerateToken: async (pathname, payload) => {
 				let data: Record<string, unknown>; try { data = JSON.parse(payload || "{}"); } catch { throw new ApiFailure(400, "INVALID_UPLOAD_PAYLOAD", "上传参数无效"); }
 				const session = await authenticateRequest(c.req.raw, String(data.csrfToken || ""));
-				const rows = await getDatabase().query<Intent>("SELECT * FROM media_upload_intents WHERE site_id=$1 AND id=$2", [getSiteId(), String(data.intentId || "")]); const intent = rows[0];
+				const intent = collection(await getStore().read(), "media_upload_intents")[String(data.intentId || "")] as Intent | undefined;
 				if (!intent || intent.owner_id !== session.user.id || intent.pathname !== pathname || intent.state !== "pending" || new Date(intent.expires_at).getTime() <= Date.now()) throw new ApiFailure(403, "UPLOAD_INTENT_DENIED", "上传许可失效或不属于当前用户");
 				return { allowedContentTypes: [intent.content_type], maximumSizeInBytes: Number(intent.size), validUntil: Date.now()+10*60*1000, addRandomSuffix: false, allowOverwrite: false, tokenPayload: JSON.stringify({ intentId: intent.id, ownerId: session.user.id, siteId: getSiteId() }), callbackUrl: `${new URL(c.req.raw.url).origin}/api/media/upload` };
 			},
 			onUploadCompleted: async ({ blob, tokenPayload }) => {
 				let payload: Record<string, unknown>; try { payload = JSON.parse(tokenPayload || "{}"); } catch { throw new ApiFailure(403, "UPLOAD_CALLBACK_DENIED", "上传回调无效"); }
 				if (payload.siteId !== getSiteId()) throw new ApiFailure(403, "UPLOAD_CALLBACK_DENIED", "上传回调不属于此站点");
-				const rows = await getDatabase().query<Intent>("SELECT * FROM media_upload_intents WHERE site_id=$1 AND id=$2", [getSiteId(), String(payload.intentId || "")]); const intent = rows[0];
+				const intent = collection(await getStore().read(), "media_upload_intents")[String(payload.intentId || "")] as Intent | undefined;
 				if (!intent || intent.owner_id !== payload.ownerId || intent.pathname !== blob.pathname) throw new ApiFailure(403, "UPLOAD_CALLBACK_DENIED", "上传归属或路径不一致");
 				if (intent.state === "complete") return;
 				if (intent.state !== "pending" || new Date(intent.expires_at).getTime() <= Date.now()) throw new ApiFailure(403, "UPLOAD_INTENT_EXPIRED", "上传许可已失效");
@@ -198,10 +190,13 @@ export function registerMediaRoutes(app: AdminApp): void {
 				if (!source || source.statusCode !== 200) throw new ApiFailure(409, "UPLOAD_NOT_FOUND", "上传内容尚不可读取");
 				const bytes = await readStream(source.stream, Number(intent.size)); const detected = safeMediaType(bytes);
 				if (bytes.length !== Number(intent.size) || (detected !== intent.content_type && !(detected === "image/x-icon" && intent.content_type === "image/vnd.microsoft.icon"))) throw new ApiFailure(415, "UPLOAD_CONTENT_MISMATCH", "文件实际内容与声明类型不符");
-				await getDatabase().transaction(async (tx) => {
-					const media: Media = { id: intent.id, pathname: intent.pathname, name: intent.name, contentType: intent.content_type, size: bytes.length, ownerId: intent.owner_id, alt: "", caption: "", digest: createHash("sha256").update(bytes).digest("hex"), createdAt: new Date().toISOString() };
-					await tx.query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,'media',$2,$3::jsonb) ON CONFLICT(site_id,kind,id) DO NOTHING", [getSiteId(), intent.id, JSON.stringify(media)]);
-					await tx.query("UPDATE media_upload_intents SET state='complete' WHERE site_id=$1 AND id=$2 AND state='pending'", [getSiteId(), intent.id]);
+				const media: Media = { id: intent.id, pathname: intent.pathname, name: intent.name, contentType: intent.content_type, size: bytes.length, ownerId: intent.owner_id, alt: "", caption: "", digest: createHash("sha256").update(bytes).digest("hex"), createdAt: new Date().toISOString() };
+				await getStore().update((state) => {
+					const current = collection(state, "media_upload_intents")[intent.id] as Intent | undefined;
+					if (!current || current.owner_id !== payload.ownerId || current.pathname !== blob.pathname) throw new ApiFailure(403, "UPLOAD_CALLBACK_DENIED", "上传归属或路径不一致");
+					if (current.state === "complete") return;
+					if (current.state !== "pending" || new Date(current.expires_at).getTime() <= Date.now()) throw new ApiFailure(403, "UPLOAD_INTENT_EXPIRED", "上传许可已失效");
+					const now = new Date().toISOString(); collection(state, "entities")[`media:${intent.id}`] ||= { id: intent.id, kind: "media", data: media, revision: 1, created_at: now, updated_at: now }; current.state = "complete";
 				});
 			},
 		}); return c.json(result);
@@ -222,12 +217,12 @@ export function registerMediaRoutes(app: AdminApp): void {
 		const media = await mediaById(c.req.param("id")); const body = await readJson(c.req.raw, 65536);
 		const patch: Record<string,string> = {};
 		for (const [key, limit] of [["alt",1000],["caption",5000]] as const) if (body[key] !== undefined) { if (typeof body[key] !== "string" || body[key].length > limit) throw new ApiFailure(400, "INVALID_MEDIA_METADATA", "替代文本或图注过长"); patch[key] = body[key]; }
-		const rows = await getDatabase().query<{data:Media}>("UPDATE entities SET data=data||$3::jsonb,revision=revision+1,updated_at=now() WHERE site_id=$1 AND kind='media' AND id=$2 RETURNING data", [getSiteId(), media.id, JSON.stringify(patch)]);
-		return c.json({ data: publicMedia(rows[0]!.data) });
+		const updated = await getStore().update((state) => { const row = collection(state, "entities")[`media:${media.id}`]; const current = row?.data as Media | undefined; if (!row || !current || current.deleted) throw new ApiFailure(404, "MEDIA_NOT_FOUND", "媒体不存在"); row.data = { ...current, ...patch }; row.revision = Number(row.revision)+1; row.updated_at = new Date().toISOString(); return row.data as Media; });
+		return c.json({ data: publicMedia(updated) });
 	});
 	app.delete("/api/media/:id", requireAdmin, async (c) => {
 		const media = await mediaById(c.req.param("id"));
 		// Tombstone only. Historical snapshots and immutable public versions retain their bytes.
-		await getDatabase().query("UPDATE entities SET data=jsonb_set(data,'{deleted}','true'::jsonb),revision=revision+1,updated_at=now() WHERE site_id=$1 AND kind='media' AND id=$2", [getSiteId(), media.id]); return c.json({ data: { id: media.id, deleted: true } });
+		await getStore().update((state) => { const row = collection(state, "entities")[`media:${media.id}`]; if (row) { row.data = { ...(row.data as Media), deleted: true }; row.revision = Number(row.revision)+1; row.updated_at = new Date().toISOString(); } }); return c.json({ data: { id: media.id, deleted: true } });
 	});
 }

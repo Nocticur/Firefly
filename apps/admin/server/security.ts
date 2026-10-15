@@ -2,6 +2,7 @@ import { timingSafeEqual, createHash } from "node:crypto";
 import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { RuntimeEnvironment } from "../shared/contracts.js";
+import { hostedProduction, previewOrigin, siteOrigin } from "./runtime-config.js";
 
 export class ApiFailure extends HTTPException {
 	readonly code: string;
@@ -19,9 +20,9 @@ export function runtimeEnvironment(): RuntimeEnvironment {
 	if (process.env.VERCEL_ENV && value !== process.env.VERCEL_ENV) throw new ApiFailure(503, "ENVIRONMENT_MISMATCH", "APP_ENV 与 Vercel 环境不一致");
 	return value;
 }
-export function productionEnvironment(): boolean { return runtimeEnvironment() === "production" && process.env.APP_ENV === "production" && process.env.VERCEL_ENV === "production" && process.env.ENABLE_PRODUCTION_PUBLISH === "true"; }
-export function requireProduction(): void {
-	if (!productionEnvironment()) throw new ApiFailure(403, "PRODUCTION_PERMISSION_REQUIRED", "开发及预览环境没有生产发布权限");
+export function productionEnvironment(enabled = false): boolean { return runtimeEnvironment() === "production" && hostedProduction() && enabled; }
+export function requireProduction(enabled = false): void {
+	if (!productionEnvironment(enabled)) throw new ApiFailure(403, "PRODUCTION_PERMISSION_REQUIRED", "请在生产环境的服务设置中启用发布");
 }
 export function digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 export function constantTimeEqual(left: string, right: string): boolean {
@@ -30,11 +31,11 @@ export function constantTimeEqual(left: string, right: string): boolean {
 export function managementOrigin(): string {
 	const environment = runtimeEnvironment();
 	if (environment === "production") {
-		if (process.env.ADMIN_ORIGIN && process.env.ADMIN_ORIGIN !== "https://blog.mourn.top") throw new ApiFailure(503, "CONFIGURATION_REQUIRED", "生产 ADMIN_ORIGIN 必须与博客一致：https://blog.mourn.top");
-		return "https://blog.mourn.top";
+		if (process.env.ADMIN_ORIGIN && process.env.ADMIN_ORIGIN !== siteOrigin) throw new ApiFailure(503, "CONFIGURATION_REQUIRED", "生产管理地址必须与博客一致");
+		return siteOrigin;
 	}
-	const origin = environment === "preview" ? process.env.ADMIN_PREVIEW_ORIGIN : process.env.ADMIN_DEV_ORIGIN || "http://localhost:3000";
-	if (!origin) throw new ApiFailure(503, "CONFIGURATION_REQUIRED", "缺少 ADMIN_PREVIEW_ORIGIN");
+	const origin = environment === "preview" ? process.env.ADMIN_PREVIEW_ORIGIN || previewOrigin() : process.env.ADMIN_DEV_ORIGIN || "http://localhost:3000";
+	if (!origin) throw new ApiFailure(503, "CONFIGURATION_REQUIRED", "无法识别预览部署地址，请检查 Vercel 系统变量");
 	const parsed = new URL(origin);
 	if (parsed.origin !== origin || (environment === "preview" && parsed.protocol !== "https:") || (environment === "development" && !["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname))) throw new ApiFailure(503, "CONFIGURATION_REQUIRED", "管理域名配置不合法");
 	return origin;

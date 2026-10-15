@@ -1,273 +1,401 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash, createHmac, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { Resend } from "resend";
-import { createDatabase, type Database } from "../server/db.js";
+import { createHash, randomUUID } from "node:crypto";
+import {
+	collection,
+	createMemoryStore,
+	type FileStore,
+	type Row,
+} from "../server/file-store.js";
 import { ApiFailure } from "../server/security.js";
-import { createBackup, processMaintenanceTask, type BackupBlobProvider, type MaintenanceDependencies } from "../server/maintenance.js";
-import { deliverMail, processResendWebhook, reconcileMail, type MailDependencies, type MailProvider } from "../server/mail.js";
-
-const databaseUrl = process.env.ADMIN_TEST_DATABASE_URL;
-type Row = Record<string, unknown>;
-const tables = ["entities", "sessions", "oauth_states", "comments", "visitor_bans", "friends", "media_upload_intents", "mail_outbox", "release_snapshots", "release_tasks", "release_locks", "maintenance_backups", "maintenance_outbox", "maintenance_locks", "maintenance_backup_claims", "interaction_rate_limits"];
-function deferred() { let resolve!: () => void; const promise = new Promise<void>((done) => { resolve = done; }); return { promise, resolve }; }
+import {
+	claimMaintenanceTask,
+	createBackup,
+	processMaintenanceTask,
+	restoreBackup,
+	type BackupBlobProvider,
+} from "../server/maintenance.js";
+const site = "Nocticur/Firefly:production";
 class MemoryBlob implements BackupBlobProvider {
 	objects = new Map<string, Buffer>();
 	puts: string[] = [];
-	onPut?: (pathname: string, bytes: Buffer) => Promise<void>;
-	async put(pathname: string, bytes: Buffer) {
-		this.puts.push(pathname);
-		if (this.objects.has(pathname)) throw new Error("Immutable object already exists");
-		this.objects.set(pathname, Buffer.from(bytes));
-		await this.onPut?.(pathname, bytes);
+	onPut?: () => Promise<void>;
+	async put(path: string, bytes: Buffer) {
+		this.puts.push(path);
+		if (this.objects.has(path)) throw new Error("immutable");
+		this.objects.set(path, Buffer.from(bytes));
+		await this.onPut?.();
 	}
-	async get(pathname: string) { return this.objects.get(pathname) || null; }
+	async get(path: string) {
+		return this.objects.get(path) || null;
+	}
 }
-async function migrate(db: Database) {
-	for (const name of ["001-core.sql", "002-release.sql", "003-interactions.sql", "004-maintenance-guards.sql"]) await db.query(await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+function deferred() {
+	let resolve!: () => void;
+	const promise = new Promise<void>((done) => {
+		resolve = done;
+	});
+	return { resolve, promise };
 }
-async function task(db: Database, site: string, kind: string, state = "queued", details: Row = {}) {
+async function task(store: FileStore, kind: string, details: Row = {}) {
 	const id = randomUUID();
-	await db.query("INSERT INTO release_tasks(site_id,id,kind,idempotency_key,state,details) VALUES($1,$2,$3,$2,$4,$5::jsonb)", [site, id, kind, state, JSON.stringify(details)]);
+	await store.update((state) => {
+		collection(state, "release_tasks")[id] = {
+			id,
+			kind,
+			state: "queued",
+			details,
+			created_at: new Date().toISOString(),
+		};
+	});
 	return id;
 }
-async function post(db: Database, site: string, source: string, id = randomUUID()) {
-	await db.query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,'post',$2,$3::jsonb)", [site, id, JSON.stringify({ source, draft: true })]);
+async function post(store: FileStore, source: string) {
+	const id = randomUUID();
+	await store.update((state) => {
+		collection(state, "entities")[`post:${id}`] = {
+			id,
+			kind: "post",
+			data: { source, draft: true },
+			revision: 1,
+		};
+	});
 	return id;
 }
+const failure = (code: string) => (error: unknown) =>
+	error instanceof ApiFailure && error.code === code;
 
-test("maintenance is fenced, idempotent and restores without replaying providers", { skip: !databaseUrl }, async (t) => {
-	const db = createDatabase(databaseUrl!);
-	const isolationName = `maintenance_restore_${randomUUID().replaceAll("-", "")}`;
-	const isolationUrl = new URL(databaseUrl!); isolationUrl.pathname = `/${isolationName}`;
-	const sites = new Set<string>();
-	const site = () => { const value = `tests/maintenance-${randomUUID()}:production`; sites.add(value); return value; };
-	const saved = { publish: process.env.ENABLE_PRODUCTION_PUBLISH, email: process.env.ENABLE_PRODUCTION_EMAIL };
-	let createdIsolation = false;
-	try {
-		await migrate(db);
-		await db.query(`CREATE DATABASE "${isolationName}"`); createdIsolation = true;
-		const isolated = createDatabase(isolationUrl.toString());
-		try { await migrate(isolated); } finally { await isolated.close(); }
-		await t.test("parallel backup calls freeze one snapshot and create one immutable object", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const id = randomUUID();
-			await post(db, currentSite, "private source");
-			const entered = deferred(); const release = deferred();
-			blob.onPut = async () => { entered.resolve(); await release.promise; };
-			const first = createBackup(id, db, currentSite, { blob }); await entered.promise;
-			try {
-				await assert.rejects(createBackup(id, db, currentSite, { blob }), (error: unknown) => error instanceof ApiFailure && error.code === "MAINTENANCE_BUSY");
-				assert.equal(blob.puts.length, 1);
-			} finally { release.resolve(); }
-			const verified = await first; assert.equal(verified.state, "verified");
-			assert.equal((await createBackup(id, db, currentSite, { blob })).sha256, verified.sha256);
-			assert.equal(blob.puts.length, 1);
-		});
-		await t.test("expired backup workers cannot overwrite a newer fence or refreeze changed content", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const id = randomUUID();
-			const postId = await post(db, currentSite, "original bytes");
-			const entered = deferred(); const release = deferred();
-			blob.onPut = async () => { entered.resolve(); await release.promise; };
-			const first = createBackup(id, db, currentSite, { blob });
-			const settledFirst = first.then((value) => ({ value, error: null }), (error) => ({ value: null, error }));
-			await entered.promise;
-			try {
-				await db.query("UPDATE maintenance_backup_claims SET lease_until=now()-interval '1 second' WHERE site_id=$1 AND id=$2", [currentSite, id]);
-				await db.query("UPDATE entities SET data=$3::jsonb WHERE site_id=$1 AND id=$2", [currentSite, postId, JSON.stringify({ source: "new live bytes", draft: true })]);
-				const second = await createBackup(id, db, currentSite, { blob });
-				assert.equal(second.state, "verified"); assert.equal(blob.puts.length, 1);
-				const captured = JSON.parse(blob.objects.get(String(second.pathname))!.toString());
-				assert.equal(captured.tables.entities[0].data.source, "original bytes");
-			} finally { release.resolve(); }
-			assert.ok((await settledFirst).error);
-			assert.equal((await db.query<Row>("SELECT state FROM maintenance_backups WHERE site_id=$1 AND id=$2", [currentSite, id]))[0].state, "verified");
-		});
-		await t.test("same-size corrupt readbacks cannot be marked verified", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const id = randomUUID();
-			blob.onPut = async (pathname, bytes) => { blob.objects.set(pathname, Buffer.alloc(bytes.length, 120)); };
-			await assert.rejects(createBackup(id, db, currentSite, { blob }), /checksum/);
-			assert.equal((await db.query<Row>("SELECT state FROM maintenance_backups WHERE site_id=$1 AND id=$2", [currentSite, id]))[0].state, "writing");
-		});
-		await t.test("parallel maintenance workers claim one task and cannot overwrite newer task status", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const id = await task(db, currentSite, "backup");
-			const deps: MaintenanceDependencies = { db, site: currentSite, blob, skipCapabilityCheck: true };
-			const entered = deferred(); const release = deferred();
-			blob.onPut = async () => { entered.resolve(); await release.promise; };
-			const first = processMaintenanceTask(id, deps); await entered.promise;
-			try {
-				assert.deepEqual(await processMaintenanceTask(id, deps), { done: false, state: "queued" });
-				await db.query("UPDATE maintenance_locks SET lease_until=now()-interval '1 second' WHERE site_id=$1", [currentSite]);
-				assert.deepEqual(await processMaintenanceTask(id, deps), { done: false, state: "queued" });
-			} finally { release.resolve(); }
-			assert.deepEqual(await first, { done: false, state: "queued" });
-			assert.equal((await db.query<Row>("SELECT state FROM release_tasks WHERE site_id=$1 AND id=$2", [currentSite, id]))[0].state, "running");
-			assert.deepEqual(await processMaintenanceTask(id, deps), { done: true, state: "verified" });
-			assert.equal(blob.puts.length, 1);
-		});
-		await t.test("daily maintenance skips blocked restored publishes and disabled email", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const id = await task(db, currentSite, "daily");
-			await task(db, currentSite, "publish", "blocked", { restoreRequiresReconciliation: true });
-			await task(db, currentSite, "publish", "deploying", { restoreRequiresReconciliation: true });
-			const normal = await task(db, currentSite, "publish", "unknown");
-			process.env.ENABLE_PRODUCTION_PUBLISH = "true"; process.env.ENABLE_PRODUCTION_EMAIL = "false";
-			const publishes: string[] = []; let mail = 0;
-			const result = await processMaintenanceTask(id, { db, site: currentSite, blob, skipCapabilityCheck: true, processPublish: async (publishId) => { publishes.push(publishId); }, deliverMail: async () => { mail++; } });
-			assert.deepEqual(result, { done: true, state: "verified" }); assert.deepEqual(publishes, [normal]); assert.equal(mail, 0);
-		});
-		await t.test("daily notification repair runs with publishing disabled and a failed backup", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const id = await task(db, currentSite, "daily");
-			blob.onPut = async (pathname, bytes) => { blob.objects.set(pathname, Buffer.alloc(bytes.length, 120)); };
-			process.env.ENABLE_PRODUCTION_PUBLISH = "false"; process.env.ENABLE_PRODUCTION_EMAIL = "false";
-			let notifications = 0; let publishes = 0; let emails = 0;
-			const result = await processMaintenanceTask(id, { db, site: currentSite, blob, skipCapabilityCheck: true, reconcileNotifications: async () => { notifications++; }, processPublish: async () => { publishes++; }, deliverMail: async () => { emails++; } });
-			assert.deepEqual(result, { done: true, state: "failed" }); assert.equal(notifications, 1); assert.equal(publishes, 0); assert.equal(emails, 0);
-			assert.equal((await db.query<Row>("SELECT state FROM maintenance_backups WHERE site_id=$1 AND id=$2", [currentSite, id]))[0].state, "writing");
-		});
-		await t.test("failed daily notification repair keeps its successful verified backup", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const id = await task(db, currentSite, "daily");
-			let notifications = 0;
-			const result = await processMaintenanceTask(id, { db, site: currentSite, blob, skipCapabilityCheck: true, reconcileNotifications: async () => { notifications++; throw new Error("notification record remains pending"); } });
-			assert.deepEqual(result, { done: true, state: "failed" }); assert.equal(notifications, 1);
-			assert.equal((await db.query<Row>("SELECT state FROM maintenance_backups WHERE site_id=$1 AND id=$2", [currentSite, id]))[0].state, "verified");
-		});
-		await t.test("restore preserves signed post-backup bounce and complaint facts without retrying mail", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const backupId = randomUUID();
-			const secretBytes = Buffer.from("restore audit test signing secret, no provider credentials");
-			const webhookSecret = `whsec_${secretBytes.toString("base64")}`;
-			const provider: MailProvider = {
-				emails: {
-					async send() { throw new Error("Restored failure must never send again"); },
-					async list() { throw new Error("Signed terminal receipt does not need provider searching"); },
-					async get() { throw new Error("Signed terminal receipt does not need provider searching"); },
-				},
-				webhooks: new Resend("re_test_not_a_real_credential").webhooks,
+test("private flat-file backups freeze a consistent immutable snapshot and deduplicate by task", async () => {
+	const store = createMemoryStore(site),
+		blob = new MemoryBlob(),
+		id = randomUUID();
+	const postId = await post(store, "private draft");
+	const entered = deferred(),
+		release = deferred();
+	blob.onPut = async () => {
+		entered.resolve();
+		await release.promise;
+	};
+	const first = createBackup(id, store, site, { blob });
+	await entered.promise;
+	await assert.rejects(
+		() => createBackup(id, store, site, { blob }),
+		failure("MAINTENANCE_BUSY"),
+	);
+	release.resolve();
+	const record = await first;
+	assert.equal(record.state, "verified");
+	assert.equal(blob.puts.length, 1);
+	const backup = JSON.parse(
+		blob.objects.get(String(record.pathname))!.toString(),
+	);
+	assert.equal(backup.schemaVersion, 3);
+	assert.equal(
+		backup.collections.entities[`post:${postId}`].data.source,
+		"private draft",
+	);
+	assert.equal(backup.collections.sessions, undefined);
+	assert.equal(backup.collections.mail_outbox, undefined);
+	assert.equal(
+		(await createBackup(id, store, site, { blob })).sha256,
+		record.sha256,
+	);
+	assert.equal(blob.puts.length, 1);
+});
+
+test("backup upload with a lost acknowledgement is recovered by immutable checksum", async () => {
+	const store = createMemoryStore(site),
+		blob = new MemoryBlob();
+	await post(store, "one");
+	blob.onPut = async () => {
+		throw new Error("acknowledgement lost");
+	};
+	const record = await createBackup(randomUUID(), store, site, { blob });
+	assert.equal(record.state, "verified");
+	assert.equal(blob.puts.length, 1);
+});
+
+test("restore makes a safety backup, invalidates sessions and leaves retired mail history untouched", async () => {
+	const store = createMemoryStore(site),
+		blob = new MemoryBlob(),
+		postId = await post(store, "old source");
+	await store.update((state) => {
+		collection(state, "mail_outbox").pending = {
+			id: "pending",
+			notification_key: "key",
+			recipient: "reader@example.invalid",
+			status: "pending",
+			provider_id: null,
+		};
+	});
+	const backup = await createBackup("old", store, site, { blob });
+	assert.equal(backup.state, "verified");
+	await store.update((state) => {
+		(collection(state, "entities")[`post:${postId}`].data as Row).source =
+			"new source";
+		collection(state, "entities")["service_settings:default"] = {
+			id: "default",
+			kind: "service_settings",
+			data: { publish: false, maintenance: false },
+			revision: 4,
+		};
+		collection(state, "sessions").session = { token_hash: "secret" };
+		collection(state, "mail_outbox").sent = {
+			id: "sent",
+			notification_key: "receipt",
+			recipient: "reader@example.invalid",
+			status: "sent",
+			provider_id: "irreversible-provider-id",
+		};
+		collection(state, "maintenance_outbox").date = {
+			date_key: "date",
+			task_id: "existing",
+		};
+	});
+	const restore = await task(store, "restore", { backupId: "old" });
+	assert.deepEqual(
+		await processMaintenanceTask(restore, {
+			store,
+			site,
+			blob,
+			skipCapabilityCheck: true,
+		}),
+		{ done: true, state: "verified" },
+	);
+	const state = await store.read();
+	assert.equal(
+		(collection(state, "entities")[`post:${postId}`].data as Row).source,
+		"old source",
+	);
+	assert.equal(
+		collection(state, "entities")["service_settings:default"].revision,
+		4,
+	);
+	assert.deepEqual(Object.keys(collection(state, "sessions")), []);
+	assert.equal(
+		collection(state, "mail_outbox").sent.provider_id,
+		"irreversible-provider-id",
+	);
+	assert.equal(collection(state, "mail_outbox").pending.status, "pending");
+	assert.ok(
+		Object.keys(collection(state, "maintenance_backups")).some((id) =>
+			id.startsWith(`before-restore-${restore}-`),
+		),
+	);
+	assert.equal(
+		collection(state, "maintenance_outbox").date.task_id,
+		"existing",
+	);
+});
+
+test("restored publish tasks cannot replay and current non-publish tasks survive", async () => {
+	const store = createMemoryStore(site),
+		blob = new MemoryBlob();
+	await post(store, "draft");
+	const publishId = await task(store, "publish");
+	await createBackup("old", store, site, { blob });
+	await store.update((state) => {
+		collection(state, "release_tasks")[publishId].state = "failed";
+	});
+	const restore = await task(store, "restore", { backupId: "old" });
+	await restoreBackup("old", restore, {
+		store,
+		site,
+		blob,
+		skipCapabilityCheck: true,
+	});
+	const row = collection(await store.read(), "release_tasks")[publishId];
+	assert.equal(row.state, "blocked");
+	assert.equal((row.details as Row).restoreRequiresReconciliation, true);
+	assert.ok(collection(await store.read(), "release_tasks")[restore]);
+});
+
+test("restore refuses active or unknown publishes before any content change", async () => {
+	for (const publishState of ["running", "unknown"]) {
+		const store = createMemoryStore(site),
+			blob = new MemoryBlob(),
+			postId = await post(store, "old");
+		await createBackup("old", store, site, { blob });
+		await store.update((state) => {
+			(collection(state, "entities")[`post:${postId}`].data as Row).source =
+				"new";
+			collection(state, "release_tasks").uncertain = {
+				id: "uncertain",
+				kind: "publish",
+				state: publishState,
 			};
-			const mail: MailDependencies = { db, site: currentSite, provider, webhookSecret };
-			const cases = [
-				{ id: randomUUID(), initial: "sent", event: "email.bounced", details: { bounce: { message: "邮箱不存在" } }, createdAfterBackup: false },
-				{ id: randomUUID(), initial: "sent", event: "email.complained", details: {}, createdAfterBackup: false },
-				{ id: randomUUID(), initial: "pending", event: "email.failed", details: { failed: { reason: "provider failure after backup" } }, createdAfterBackup: false },
-				{ id: randomUUID(), initial: "pending", event: "email.bounced", details: { bounce: { message: "new notification failed" } }, createdAfterBackup: true },
-			];
-			const seed = async (entry: typeof cases[number]) => { await db.query("INSERT INTO mail_outbox(site_id,id,notification_key,recipient,subject,text_body,status) VALUES($1,$2,$2,'receipt@example.invalid','Frozen receipt','private',$3)", [currentSite, entry.id, entry.initial]); };
-			const callback = async (entry: typeof cases[number], type = entry.event) => {
-				const payload = JSON.stringify({ type, data: { email_id: `provider-${entry.id}`, to: ["receipt@example.invalid"], subject: "Frozen receipt", tags: { notification_id: entry.id }, ...entry.details } });
-				const headers = { id: `msg_${randomUUID()}`, timestamp: String(Math.floor(Date.now() / 1000)), signature: "" };
-				headers.signature = `v1,${createHmac("sha256", secretBytes).update(`${headers.id}.${headers.timestamp}.${payload}`).digest("base64")}`;
-				await processResendWebhook(payload, headers, mail);
-			};
-			for (const entry of cases) if (!entry.createdAfterBackup) await seed(entry);
-			await createBackup(backupId, db, currentSite, { blob });
-			for (const entry of cases) { if (entry.createdAfterBackup) await seed(entry); await callback(entry); }
-			const before = await db.query<Row>("SELECT * FROM mail_outbox WHERE site_id=$1 ORDER BY id", [currentSite]);
-			assert.ok(before.every((row) => row.status === "failed" && row.provider_id && row.last_error));
-			const restoreId = await task(db, currentSite, "restore", "queued", { backupId });
-			assert.deepEqual(await processMaintenanceTask(restoreId, { db, site: currentSite, blob, skipCapabilityCheck: true, liveDatabaseUrl: databaseUrl, restoreDatabaseUrl: isolationUrl.toString() }), { done: true, state: "verified" });
-			assert.deepEqual(await db.query<Row>("SELECT * FROM mail_outbox WHERE site_id=$1 ORDER BY id", [currentSite]), before);
-			for (const entry of cases) {
-				await callback(entry, "email.sent");
-				assert.equal(await reconcileMail(entry.id, undefined, mail), "failed");
-				assert.deepEqual(await deliverMail(entry.id, mail), { state: "failed" });
-			}
-			assert.deepEqual(await db.query<Row>("SELECT * FROM mail_outbox WHERE site_id=$1 ORDER BY id", [currentSite]), before);
 		});
-		await t.test("restore gates all live writes, retains safety backup and blocks old Git/mail/workflow replay", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const backupId = randomUUID();
-			const postId = await post(db, currentSite, "original private draft");
-			await db.query("INSERT INTO release_locks(site_id,fencing_token) VALUES($1,8)", [currentSite]);
-			const frozen = await task(db, currentSite, "publish", "frozen");
-			const unknown = await task(db, currentSite, "publish", "unknown");
-			const deploying = await task(db, currentSite, "publish", "deploying");
-			const oldDaily = await task(db, currentSite, "daily");
-			await db.query("UPDATE release_tasks SET target_sha=$3 WHERE site_id=$1 AND id=$2", [currentSite, deploying, "a".repeat(40)]);
-			for (const status of ["pending", "sending", "unknown", "failed", "sent"]) await db.query("INSERT INTO mail_outbox(site_id,id,notification_key,recipient,subject,text_body,status) VALUES($1,$2,$3,'test@example.invalid','test','private',$3)", [currentSite, randomUUID(), status]);
-			await createBackup(backupId, db, currentSite, { blob });
-			await db.query("UPDATE release_tasks SET state='verified' WHERE site_id=$1", [currentSite]);
-			await db.query("UPDATE mail_outbox SET status='pending' WHERE site_id=$1 AND status='sending'", [currentSite]);
-			await db.query("UPDATE mail_outbox SET status='sent',provider_id='delivered-after-backup' WHERE site_id=$1 AND notification_key='pending'", [currentSite]);
-			await db.query("INSERT INTO mail_outbox(site_id,id,notification_key,recipient,subject,text_body,status,provider_id) VALUES($1,$2,'new-unknown','test@example.invalid','test','private','unknown','unknown-provider-id')", [currentSite, randomUUID()]);
-			await db.query("UPDATE entities SET data=$3::jsonb WHERE site_id=$1 AND id=$2", [currentSite, postId, JSON.stringify({ source: "new live private draft", draft: true })]);
-			await db.query("INSERT INTO sessions(site_id,token_hash,user_data,csrf_hash,expires_at) VALUES($1,'session','{}','csrf',now()+interval '1 day')", [currentSite]);
-			await db.query("INSERT INTO oauth_states(site_id,state_hash,cookie_hash,expires_at) VALUES($1,'oauth','cookie',now()+interval '1 day')", [currentSite]);
-			await db.query("INSERT INTO maintenance_outbox(site_id,date_key,task_id) VALUES($1,'new-day',$2)", [currentSite, oldDaily]);
-			const restoreId = await task(db, currentSite, "restore", "queued", { backupId });
-			const entered = deferred(); const release = deferred();
-			blob.onPut = async (_pathname, bytes) => { if (JSON.parse(bytes.toString()).id === `before-restore-${restoreId}`) { entered.resolve(); await release.promise; } };
-			let git = 0; let mail = 0;
-			const dependencies: MaintenanceDependencies = { db, site: currentSite, blob, skipCapabilityCheck: true, liveDatabaseUrl: databaseUrl, restoreDatabaseUrl: isolationUrl.toString(), processPublish: async () => { git++; }, deliverMail: async () => { mail++; } };
-			const restore = processMaintenanceTask(restoreId, dependencies);
-			await Promise.race([entered.promise, restore.then((result) => { throw new Error(`Restore finished before reaching the write gate: ${JSON.stringify(result)}`); })]);
-			try {
-				for (const sql of ["UPDATE entities SET revision=revision+1 WHERE site_id=$1", "UPDATE mail_outbox SET status='pending' WHERE site_id=$1", "DELETE FROM sessions WHERE site_id=$1", "UPDATE release_tasks SET state='queued' WHERE site_id=$1"]) await assert.rejects(db.query(sql, [currentSite]), (error: unknown) => (error as { code: string }).code === "55P03");
-				// Another site keeps its normal write permissions.
-				await post(db, site(), "isolated site can write");
-			} finally { release.resolve(); }
-			assert.deepEqual(await restore, { done: true, state: "verified" }); assert.equal(git, 0); assert.equal(mail, 0);
-			const [restoredPost] = await db.query<Row>("SELECT data FROM entities WHERE site_id=$1 AND id=$2", [currentSite, postId]);
-			assert.equal((restoredPost.data as Row).source, "original private draft");
-			for (const id of [frozen, unknown, deploying]) {
-				const [row] = await db.query<Row>("SELECT state,details FROM release_tasks WHERE site_id=$1 AND id=$2", [currentSite, id]);
-				assert.equal(row.state, "blocked"); assert.equal((row.details as Row).restoreRequiresReconciliation, true);
-			}
-			assert.equal((await db.query<Row>("SELECT target_sha FROM release_tasks WHERE site_id=$1 AND id=$2", [currentSite, deploying]))[0].target_sha, "a".repeat(40));
-			assert.equal((await db.query<Row>("SELECT state FROM release_tasks WHERE site_id=$1 AND id=$2", [currentSite, oldDaily]))[0].state, "verified");
-			const mailRows = await db.query<Row>("SELECT notification_key,status,provider_id FROM mail_outbox WHERE site_id=$1", [currentSite]);
-			for (const row of mailRows) assert.equal(row.status, ["sent", "pending"].includes(String(row.notification_key)) ? "sent" : "blocked");
-			assert.equal(mailRows.find((row) => row.notification_key === "pending")?.provider_id, "delivered-after-backup");
-			assert.equal(mailRows.find((row) => row.notification_key === "new-unknown")?.provider_id, "unknown-provider-id");
-			assert.equal((await db.query("SELECT token_hash FROM sessions WHERE site_id=$1", [currentSite])).length, 0);
-			assert.equal((await db.query("SELECT state_hash FROM oauth_states WHERE site_id=$1", [currentSite])).length, 0);
-			assert.equal((await db.query("SELECT id FROM maintenance_backups WHERE site_id=$1 AND state='verified'", [currentSite])).length, 2);
-			assert.equal((await db.query("SELECT date_key FROM maintenance_outbox WHERE site_id=$1 AND date_key='new-day'", [currentSite])).length, 1);
-			assert.ok(Number((await db.query<Row>("SELECT fencing_token FROM release_locks WHERE site_id=$1", [currentSite]))[0].fencing_token) > 8);
-			assert.equal(blob.puts.length, 2);
-		});
-		await t.test("unknown current Git results block restore without calling Git, mail or safety backup", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const backupId = randomUUID();
-			await post(db, currentSite, "backup draft"); await createBackup(backupId, db, currentSite, { blob });
-			const unknown = await task(db, currentSite, "publish", "unknown");
-			const restoreId = await task(db, currentSite, "restore", "queued", { backupId });
-			let providerCalls = 0;
-			const result = await processMaintenanceTask(restoreId, { db, site: currentSite, blob, skipCapabilityCheck: true, liveDatabaseUrl: databaseUrl, restoreDatabaseUrl: isolationUrl.toString(), processPublish: async () => { providerCalls++; }, deliverMail: async () => { providerCalls++; } });
-			assert.deepEqual(result, { done: true, state: "failed" }); assert.equal(providerCalls, 0); assert.equal(blob.puts.length, 1);
-			assert.equal((await db.query<Row>("SELECT state FROM release_tasks WHERE site_id=$1 AND id=$2", [currentSite, unknown]))[0].state, "unknown");
-		});
-		await t.test("in-flight current email prevents restoring over its delivery claim", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const backupId = randomUUID();
-			await post(db, currentSite, "private"); await createBackup(backupId, db, currentSite, { blob });
-			const mailId = randomUUID();
-			await db.query("INSERT INTO mail_outbox(site_id,id,notification_key,recipient,subject,text_body,status) VALUES($1,$2,'in-flight','test@example.invalid','test','private','sending')", [currentSite, mailId]);
-			const restoreId = await task(db, currentSite, "restore", "queued", { backupId });
-			assert.deepEqual(await processMaintenanceTask(restoreId, { db, site: currentSite, blob, skipCapabilityCheck: true, liveDatabaseUrl: databaseUrl, restoreDatabaseUrl: isolationUrl.toString() }), { done: true, state: "failed" });
-			assert.equal((await db.query<Row>("SELECT status FROM mail_outbox WHERE site_id=$1 AND id=$2", [currentSite, mailId]))[0].status, "sending");
-			assert.equal(blob.puts.length, 1);
-		});
-		await t.test("missing or changed private media stops restore before touching live content", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const backupId = randomUUID(); const mediaId = randomUUID();
-			const bytes = Buffer.from("private media bytes"); const pathname = `drafts/${randomUUID()}.png`;
-			const postId = await post(db, currentSite, `original source media:${mediaId}`);
-			await db.query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,'media',$2,$3::jsonb)", [currentSite, mediaId, JSON.stringify({ id: mediaId, pathname, digest: createHash("sha256").update(bytes).digest("hex") })]);
-			blob.objects.set(pathname, bytes); await createBackup(backupId, db, currentSite, { blob });
-			blob.objects.set(pathname, Buffer.from("changed private media bytes"));
-			await db.query("UPDATE entities SET data=$3::jsonb WHERE site_id=$1 AND id=$2", [currentSite, postId, JSON.stringify({ source: "current private draft", draft: true })]);
-			const restoreId = await task(db, currentSite, "restore", "queued", { backupId });
-			assert.deepEqual(await processMaintenanceTask(restoreId, { db, site: currentSite, blob, skipCapabilityCheck: true, liveDatabaseUrl: databaseUrl, restoreDatabaseUrl: isolationUrl.toString() }), { done: true, state: "failed" });
-			assert.equal(((await db.query<Row>("SELECT data FROM entities WHERE site_id=$1 AND id=$2", [currentSite, postId]))[0].data as Row).source, "current private draft");
-			assert.equal(blob.puts.length, 1);
-		});
-		await t.test("aliased live database URLs are rejected before live changes", async () => {
-			const currentSite = site(); const blob = new MemoryBlob(); const backupId = randomUUID();
-			await post(db, currentSite, "private"); await createBackup(backupId, db, currentSite, { blob });
-			const restoreId = await task(db, currentSite, "restore", "queued", { backupId });
-			const alias = new URL(databaseUrl!); alias.hostname = "localhost";
-			assert.deepEqual(await processMaintenanceTask(restoreId, { db, site: currentSite, blob, skipCapabilityCheck: true, liveDatabaseUrl: databaseUrl, restoreDatabaseUrl: alias.toString() }), { done: true, state: "failed" });
-			assert.equal(blob.puts.length, 1);
-		});
-	} finally {
-		for (const [name, value] of Object.entries({ ENABLE_PRODUCTION_PUBLISH: saved.publish, ENABLE_PRODUCTION_EMAIL: saved.email })) if (value === undefined) delete process.env[name]; else process.env[name] = value;
-		for (const currentSite of sites) for (const table of [...tables].reverse()) await db.query(`DELETE FROM ${table} WHERE site_id=$1`, [currentSite]);
-		if (createdIsolation) await db.query(`DROP DATABASE "${isolationName}" WITH (FORCE)`);
-		await db.close();
+		const restore = await task(store, "restore");
+		await assert.rejects(
+			() =>
+				restoreBackup("old", restore, {
+					store,
+					site,
+					blob,
+					skipCapabilityCheck: true,
+				}),
+			failure("RESTORE_RECONCILIATION_REQUIRED"),
+		);
+		assert.equal(
+			(collection(await store.read(), "entities")[`post:${postId}`].data as Row)
+				.source,
+			"new",
+		);
 	}
+});
+
+test("concurrent write during safety backup aborts restore rather than overwriting newer data", async () => {
+	const store = createMemoryStore(site),
+		blob = new MemoryBlob(),
+		postId = await post(store, "old");
+	await createBackup("old", store, site, { blob });
+	await store.update((state) => {
+		(collection(state, "entities")[`post:${postId}`].data as Row).source =
+			"new";
+	});
+	const restore = await task(store, "restore");
+	blob.onPut = async () => {
+		await store.update((state) => {
+			(collection(state, "entities")[`post:${postId}`].data as Row).source =
+				"concurrent";
+		});
+	};
+	await assert.rejects(
+		() =>
+			restoreBackup("old", restore, {
+				store,
+				site,
+				blob,
+				skipCapabilityCheck: true,
+			}),
+		failure("RESTORE_STATE_CHANGED"),
+	);
+	assert.equal(
+		(collection(await store.read(), "entities")[`post:${postId}`].data as Row)
+			.source,
+		"concurrent",
+	);
+});
+
+test("legacy backups ignore retired mail data and preserve all live history including unfinished records", async () => {
+	const store = createMemoryStore(site),
+		blob = new MemoryBlob(),
+		postId = await post(store, "old");
+	const record = await createBackup("legacy", store, site, { blob });
+	const legacy = JSON.parse(blob.objects.get(String(record.pathname))!.toString());
+	legacy.schemaVersion = 2;
+	legacy.collections.mail_outbox = { obsolete: { oldProviderFormat: true } };
+	const bytes = Buffer.from(JSON.stringify(legacy));
+	blob.objects.set(String(record.pathname), bytes);
+	await store.update((state) => {
+		collection(state, "maintenance_backups").legacy.sha256 =
+			createHash("sha256").update(bytes).digest("hex");
+		(collection(state, "entities")[`post:${postId}`].data as Row).source = "new";
+		collection(state, "mail_outbox").history = {
+			id: "history",
+			status: "sending",
+			provider_id: "untouched-receipt",
+		};
+	});
+	const before = JSON.stringify(collection(await store.read(), "mail_outbox"));
+	const restore = await task(store, "restore");
+	await restoreBackup("legacy", restore, {
+		store, site, blob, skipCapabilityCheck: true,
+	});
+	const state = await store.read();
+	assert.equal((collection(state, "entities")[`post:${postId}`].data as Row).source, "old");
+	assert.equal(JSON.stringify(collection(state, "mail_outbox")), before);
+	assert.deepEqual(blob.objects.get(String(record.pathname)), bytes);
+});
+
+test("legacy backup compatibility still rejects unknown collections and malformed retained records", async () => {
+	for (const invalid of ["unknown-collection", "malformed-post"]) {
+		const store = createMemoryStore(site), blob = new MemoryBlob();
+		const postId = await post(store, "current");
+		const record = await createBackup("legacy", store, site, { blob });
+		const backup = JSON.parse(blob.objects.get(String(record.pathname))!.toString());
+		backup.schemaVersion = 2;
+		backup.collections.mail_outbox = {};
+		if (invalid === "unknown-collection") backup.collections.unknown = {};
+		else backup.collections.entities[`post:${postId}`].id = "mismatched";
+		const bytes = Buffer.from(JSON.stringify(backup));
+		blob.objects.set(String(record.pathname), bytes);
+		await store.update((state) => {
+			collection(state, "maintenance_backups").legacy.sha256 =
+				createHash("sha256").update(bytes).digest("hex");
+		});
+		const restore = await task(store, "restore");
+		await assert.rejects(() => restoreBackup("legacy", restore, {
+			store, site, blob, skipCapabilityCheck: true,
+		}), /Unknown backup collection|Invalid backup collection/);
+		assert.equal((collection(await store.read(), "entities")[`post:${postId}`].data as Row).source, "current");
+	}
+});
+
+test("invalid backup and lost maintenance ownership fail before restored content writes", async () => {
+	const store = createMemoryStore(site),
+		blob = new MemoryBlob(),
+		postId = await post(store, "current");
+	const record = await createBackup("corrupt", store, site, { blob });
+	blob.objects.set(String(record.pathname), Buffer.from("tampered"));
+	const restore = await task(store, "restore");
+	await assert.rejects(
+		() =>
+			restoreBackup("corrupt", restore, {
+				store,
+				site,
+				blob,
+				skipCapabilityCheck: true,
+			}),
+		/checksum/,
+	);
+	assert.equal(
+		(collection(await store.read(), "entities")[`post:${postId}`].data as Row)
+			.source,
+		"current",
+	);
+	const next = await task(store, "backup"),
+		lease = await claimMaintenanceTask(store, site, next);
+	assert.ok(lease);
+	assert.equal(await claimMaintenanceTask(store, site, next), null);
+	await store.update((state) => {
+		Object.assign(collection(state, "maintenance_locks").main, {
+			owner_id: "new-owner",
+			fencing_token: lease!.fence + 1,
+		});
+	});
+	await assert.rejects(
+		() =>
+			restoreBackup(
+				"corrupt",
+				next,
+				{ store, site, blob, skipCapabilityCheck: true },
+				lease!,
+			),
+		/superseded/,
+	);
+});
+
+test("daily maintenance completes verified release business when new publishing is disabled", async () => {
+	const store = createMemoryStore(site),
+		blob = new MemoryBlob();
+	await post(store, "draft");
+	const daily = await task(store, "daily");
+	let reconciled = 0,
+		published = 0;
+	const result = await processMaintenanceTask(daily, {
+		store,
+		site,
+		blob,
+		skipCapabilityCheck: true,
+		reconcileFinalization: async () => {
+			reconciled++;
+		},
+		processPublish: async () => {
+			published++;
+		},
+	});
+	assert.deepEqual(result, { done: true, state: "verified" });
+	assert.equal(reconciled, 1);
+	assert.equal(published, 0);
 });

@@ -29,6 +29,8 @@ route("patch", "/api/posts/{id}", "Content", "Patch supported front matter prese
 route("get", "/api/posts/{id}/history", "Content", "List versions");
 route("post", "/api/posts/{id}/restore", "Content", "Restore as a new draft preserving current saved version", false, { versionId: string, expectedRevision: revision }, ["versionId", "expectedRevision"]);
 route("post", "/api/import", "Content", "Import repository baseline once without publishing");
+route("get", "/api/service-settings", "Settings", "Read private production service switches; defaults disabled");
+route("put", "/api/service-settings", "Settings", "Save production service switches immediately with admin, Origin and CSRF verification", false, { data: { type: "object", additionalProperties: false, required: ["publish", "maintenance"], properties: { publish: { type: "boolean" }, maintenance: { type: "boolean" } } }, expectedRevision: revision }, ["data", "expectedRevision"]);
 for (const kind of ["settings", "navigation", "icons"]) {
 	route("get", `/api/${kind}`, "Settings", `Read ${kind}`);
 	route("put", `/api/${kind}`, "Settings", `Save private ${kind} revision`, false, { data: { type: "object" }, expectedRevision: revision }, ["data", "expectedRevision"]);
@@ -44,22 +46,20 @@ route("get", "/api/public/comments", "Public interactions", "Read visible commen
 route("post", "/api/public/comments", "Public interactions", "Post plain text after Turnstile, origin, ban and rate checks", true, { articleId: string, parentId: string, name: string, email: string, body: string, turnstileToken: string }, ["articleId", "name", "body", "turnstileToken"]);
 route("get", "/api/public/friends", "Public interactions", "Read last verified public friend snapshot", true);
 route("post", "/api/public/friends", "Public interactions", "Submit friend application", true, { name: string, url: string, description: string, avatar: string, email: string, turnstileToken: string }, ["name", "url", "email", "turnstileToken"]);
-for (const resource of ["comments", "bans", "friends", "mail"]) route("get", `/api/${resource}`, "Moderation", `List private ${resource} records`);
+for (const resource of ["comments", "bans", "friends"]) route("get", `/api/${resource}`, "Moderation", `List private ${resource} records`);
 route("post", "/api/comments/{id}/delete", "Moderation", "Soft-delete comment preserving reply relationships");
 route("post", "/api/bans", "Moderation", "Ban stable visitor subject", false, { subject: string, reason: string }, ["subject"]);
 route("delete", "/api/bans/{id}", "Moderation", "Unban visitor");
 route("post", "/api/friends/{id}/approve", "Moderation", "Approve for next explicit release");
-route("post", "/api/friends/{id}/reject", "Moderation", "Reject transactionally and enqueue unique notification", false, { reason: string }, ["reason"]);
+route("post", "/api/friends/{id}/reject", "Moderation", "Save a rejected application and its reason", false, { reason: string }, ["reason"]);
 route("patch", "/api/friends/{id}", "Moderation", "Save grouping and order for next release", false, { group: string, sortOrder: { type: "integer" } });
-route("post", "/api/mail/{id}/reconcile", "Mail", "Reconcile uncertain send; never blindly resend", false, { providerId: string });
-route("post", "/api/webhooks/resend", "Mail", "Receive signed Resend delivery events", true);
 route("post", "/api/releases", "Publishing", "Freeze explicit selection and return durable task", false, { postIds: { type: "array", items: string }, expectedRevisions: { type: "object", additionalProperties: revision }, idempotencyKey: string }, ["postIds", "expectedRevisions", "idempotencyKey"]);
 route("get", "/api/tasks", "Publishing", "Read durable deployment and maintenance tasks");
 route("get", "/api/tasks/{id}", "Publishing", "Read task evidence and conflict details");
 route("post", "/api/tasks/{id}/reconcile", "Publishing", "Resume or reconcile task without duplicate uncertain commit");
 route("get", "/api/maintenance/backups", "Maintenance", "List verified private backups");
 route("post", "/api/maintenance/backup", "Maintenance", "Create durable private backup task");
-route("post", "/api/maintenance/restore", "Maintenance", "Validate in isolated database and restore with write guard", false, { backupId: string, confirm: { const: true } }, ["backupId", "confirm"]);
+route("post", "/api/maintenance/restore", "Maintenance", "Validate private backup files, protect current state and restore with revision guard", false, { backupId: string, confirm: { const: true } }, ["backupId", "confirm"]);
 route("post", "/api/maintenance/check", "Maintenance", "Read deployment counts and theme release information");
 route("get", "/api/maintenance/cron", "Maintenance", "Authenticated daily checks and backup", true);
 paths["/api/maintenance/cron"].get.security = [{ cron: [] }];

@@ -3,13 +3,15 @@ import { z } from "zod";
 import { start } from "workflow/api";
 import type { AdminApp } from "./types.js";
 import type { PostRecord, TaskRecord } from "../shared/contracts.js";
-import { getDatabase, getSiteId, type Database } from "./db.js";
+import { getStore, getSiteId, collection, assertSite, type FileStore, type StoreState } from "./file-store.js";
 import { ApiFailure, requireProduction, readJson } from "./security.js";
+import { serviceEnabled } from "./service-settings.js";
 import { githubProvider, GitHubError, type GitHubProvider, type RepositoryFile } from "./github.js";
 import { assertDeploymentConfigRedirects, buildDeploymentConfig, canonicalJson, publicContentDigest, publicSettings, publishedSource, sha256, type PublishedPost, type Redirect } from "./release-format.js";
 import { publishWorkflow } from "../workflows/publish.js";
 import { requireAdmin } from "./auth.js";
 import { synchronizeRepository } from "./repository.js";
+import { vercelProjectId } from "./runtime-config.js";
 
 type Row = Record<string, unknown>;
 export type ReleaseTaskRow = Row & { id: string; kind: string; state: string; details: Row; snapshot_id: string; base_sha: string; target_sha: string | null; fence: number | null; created_at: string; updated_at: string };
@@ -18,7 +20,6 @@ export type FrozenSnapshot = {
 	files: RepositoryFile[]; deletions: string[]; settings: Record<string, unknown>; redirects: Redirect[];
 	entityRevisions: Array<{ kind: string; id: string; revision: number }>; friendIds: string[];
 	friendRevisions: Record<string, number>; selectedIds: string[];
-	friendNotifications?: Record<string, { name: string; email: string; revision: number }>;
 	media?: Record<string, Row & { id: string; pathname: string; digest: string; size: number; contentType: string; revision: number }>;
 	originalSettings?: Record<string, unknown>;
 	deploymentConfig?: Record<string, unknown>;
@@ -35,12 +36,12 @@ function replaceMedia(value: unknown, urls: Record<string, string>): unknown {
 	return value;
 }
 const terminalStates = new Set(["verified", "failed", "conflict"]);
-export function assertPublishCapability(): void {
-	requireProduction();
-	if (process.env.ENABLE_PRODUCTION_PUBLISH !== "true") throw new ApiFailure(403, "PUBLISH_DISABLED", "生产发布开关尚未启用");
-	for (const name of ["GITHUB_APP_ID", "GITHUB_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY", "VERCEL_TOKEN", "VERCEL_BLOG_PROJECT_ID"]) {
+export async function assertPublishCapability(): Promise<void> {
+	requireProduction(await serviceEnabled("publish"));
+	for (const name of ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "VERCEL_TOKEN"]) {
 		if (!process.env[name]) throw new ApiFailure(503, "PUBLISH_CONFIGURATION_REQUIRED", `缺少 ${name}`);
 	}
+	if (!vercelProjectId()) throw new ApiFailure(503, "PUBLISH_CONFIGURATION_REQUIRED", "无法识别当前 Vercel 项目，请检查系统变量");
 }
 export function taskRecord(row: Row): TaskRecord {
 	return { id: String(row.id), kind: String(row.kind), state: String(row.state), snapshotId: row.snapshot_id ? String(row.snapshot_id) : undefined,
@@ -49,18 +50,20 @@ export function taskRecord(row: Row): TaskRecord {
 		createdAt: new Date(row.created_at as string).toISOString(), updatedAt: new Date(row.updated_at as string).toISOString() };
 }
 const releaseInput = z.object({ postIds: z.array(z.string().min(1)).max(200), expectedRevisions: z.record(z.string(), z.number().int().nonnegative()), idempotencyKey: z.string().min(8).max(200) });
-export async function freezeRelease(input: z.infer<typeof releaseInput>, db = getDatabase(), site = getSiteId()): Promise<TaskRecord> {
-	return db.transaction(async (tx) => {
-		// Serialise only the short snapshot transaction, never a deployment wait.
-		await tx.query("INSERT INTO release_locks(site_id) VALUES($1) ON CONFLICT DO NOTHING", [site]);
-		await tx.query("SELECT site_id FROM release_locks WHERE site_id=$1 FOR UPDATE", [site]);
-		const existing = await tx.query<Row>("SELECT * FROM release_tasks WHERE site_id=$1 AND idempotency_key=$2", [site, input.idempotencyKey]);
-		if (existing[0]) return taskRecord(existing[0]);
-		if ((await tx.query("SELECT id FROM release_tasks WHERE site_id=$1 AND kind='publish' AND details->>'restoreRequiresReconciliation'='true' LIMIT 1", [site])).length) throw new ApiFailure(409, "RESTORED_PUBLISH_RECONCILIATION_REQUIRED", "恢复的发布记录必须先核查 Git 与生产结果，不能直接重新发布旧草稿");
-		const baseline = await tx.query<Row>("SELECT data FROM entities WHERE site_id=$1 AND kind='repository' AND id='baseline'", [site]);
-		const base = baseline[0]?.data as Record<string, unknown> | undefined;
+export async function freezeRelease(input: z.infer<typeof releaseInput>, store = getStore(), site = getSiteId()): Promise<TaskRecord> {
+	const taskId = randomUUID(); const snapshotId = randomUUID();
+	return store.update((state) => {
+		assertSite(state, site);
+		if (restoreActive(state)) throw new ApiFailure(409, "RESTORE_IN_PROGRESS", "恢复进行中，暂不能冻结发布");
+		const tasks = collection(state, "release_tasks");
+		const existing = Object.values(tasks).find((row) => row.idempotency_key === input.idempotencyKey);
+		if (existing) return taskRecord(existing);
+		if (Object.values(tasks).some((row) => row.kind === "publish" && (row.details as Row)?.restoreRequiresReconciliation)) throw new ApiFailure(409, "RESTORED_PUBLISH_RECONCILIATION_REQUIRED", "恢复的发布记录必须先核查 Git 与生产结果，不能直接重新发布旧草稿");
+		const entities = collection(state, "entities");
+		const base = entities["repository:baseline"]?.data as Row | undefined;
 		if (typeof base?.headSha !== "string") throw new ApiFailure(409, "BASELINE_REQUIRED", "先导入仓库基线，再发布内容");
-		const postRows = await tx.query<Row>("SELECT id,data,revision FROM entities WHERE site_id=$1 AND kind='post' ORDER BY id FOR SHARE", [site]);
+		const postRows = Object.values(entities).filter((row) => row.kind === "post").sort((a,b) => String(a.id).localeCompare(String(b.id)));
+
 		const selected = new Set(input.postIds);
 		if (selected.size !== input.postIds.length) throw new ApiFailure(400, "DUPLICATE_POST", "发布选择包含重复文章");
 		for (const id of selected) if (!postRows.some((row) => row.id === id)) throw new ApiFailure(404, "POST_NOT_FOUND", `文章不存在: ${id}`);
@@ -79,14 +82,14 @@ export async function freezeRelease(input: z.infer<typeof releaseInput>, db = ge
 				sources.push({ id: String(row.id), revision: post.publishedRevision ?? 1, filePath: old?.filePath || post.filePath, slug: old?.slug || post.slug, source: post.publishedSource });
 			}
 		}
-		const entityRows = await tx.query<Row>("SELECT kind,id,data,revision FROM entities WHERE site_id=$1 AND kind IN ('settings','navigation','icons') ORDER BY kind,id FOR SHARE", [site]);
+		const entityRows = Object.values(entities).filter((row) => ["settings", "navigation", "icons"].includes(String(row.kind))).sort((a,b) => `${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`));
 		const settingsRow = entityRows.find((row) => row.kind === "settings" && row.id === "default");
 		const settings: Record<string, unknown> = { schemaVersion: 1, settings: publicSettings((settingsRow?.data || {}) as Record<string, unknown>), navigation: null, icons: {} };
 		const navigation = entityRows.find((row) => row.kind === "navigation" && row.id === "default");
 		if (navigation) settings.navigation = navigation.data;
 		const icons = entityRows.find((row) => row.kind === "icons" && row.id === "default");
 		if (icons) settings.icons = icons.data;
-		const friends = await tx.query<Row>("SELECT id,name,url,avatar,description,email,group_name,sort_order,revision FROM friends WHERE site_id=$1 AND status IN ('approved','published') ORDER BY group_name,sort_order,id FOR SHARE", [site]);
+		const friends = Object.values(collection(state, "friends")).filter((row) => ["approved", "published"].includes(String(row.status))).sort((a,b) => String(a.group_name).localeCompare(String(b.group_name)) || Number(a.sort_order)-Number(b.sort_order) || String(a.id).localeCompare(String(b.id)));
 		settings.friends = friends.map((row) => ({ id: row.id, name: row.name, url: row.url, avatar: row.avatar, description: row.description, group: row.group_name, sortOrder: row.sort_order }));
 		const oldPosts = Array.isArray(base.posts) ? base.posts as PublishedPost[] : [];
 		const previousRedirects = (Array.isArray(base.redirects) ? base.redirects : []) as Redirect[];
@@ -104,7 +107,6 @@ export async function freezeRelease(input: z.infer<typeof releaseInput>, db = ge
 		if (new Set(sources.map((post) => post.filePath)).size !== sources.length) throw new ApiFailure(409, "PATH_CONFLICT", "公开文章文件路径重复");
 		const activeRoutes = new Map(sources.map((post) => [`/posts/${post.slug.replace(/^\/+|\/+$/g, "")}/`, post.id]));
 		for (const redirect of redirects) if (activeRoutes.has(redirect.from)) throw new ApiFailure(409, "SLUG_REDIRECT_CONFLICT", "该网址保留为已发布文章的永久重定向，请为当前文章选择其他 slug", { id: activeRoutes.get(redirect.from), from: redirect.from, to: redirect.to });
-		const taskId = randomUUID(); const snapshotId = randomUUID();
 		const posts = sources.map(({ id, filePath, slug, source }) => ({ id, filePath, slug, sourceSha256: sha256(source) }));
 		const digest = publicContentDigest(posts, settings, redirects);
 		const files = sources.map(({ filePath, source }) => ({ path: filePath, source }));
@@ -115,7 +117,7 @@ export async function freezeRelease(input: z.infer<typeof releaseInput>, db = ge
 		catch (error) { throw new ApiFailure(409, "PERMANENT_REDIRECT_CONFIGURATION_REQUIRED", (error as Error).message); }
 		if (snapshot.deploymentConfig) files.push({ path: "vercel.json", source: `${JSON.stringify(snapshot.deploymentConfig, null, 2)}\n` });
 		const mediaIds = referencedMedia(sources, settings);
-		const mediaRows = await tx.query<Row>("SELECT id,data,revision FROM entities WHERE site_id=$1 AND kind='media' AND id=ANY($2::text[]) FOR SHARE", [site, mediaIds]);
+		const mediaRows = mediaIds.map((id) => entities[`media:${id}`]).filter((row): row is Row => Boolean(row));
 		snapshot.media = {};
 		for (const mediaId of mediaIds) {
 			const mediaRow = mediaRows.find((row) => row.id === mediaId); const data = mediaRow?.data as Row | undefined;
@@ -123,44 +125,62 @@ export async function freezeRelease(input: z.infer<typeof releaseInput>, db = ge
 			snapshot.media[mediaId] = { ...data, id: mediaId, pathname: data.pathname, digest: data.digest, contentType: data.contentType, size: data.size, revision: Number(mediaRow.revision) };
 		}
 		snapshot.originalSettings = structuredClone(settings);
-		// Notification recipients stay in the private SQL snapshot, never in Git or manifests.
-		snapshot.friendNotifications = Object.fromEntries(friends.map((row) => [String(row.id), { name: String(row.name), email: String(row.email), revision: Number(row.revision) }]));
 		for (const file of files) if (!(file.path === "vercel.json" || /^src\/(?:content\/posts\/[^\0]+\.mdx?|data\/(?:published-state|managed-settings|redirects)\.json)$/.test(file.path)) || file.path.split("/").includes("..")) throw new ApiFailure(400, "UNSAFE_REPOSITORY_PATH", "发布路径不在允许的内容目录");
-		await tx.query("INSERT INTO release_snapshots(site_id,id,digest,data) VALUES($1,$2,$3,$4::jsonb)", [site, snapshotId, digest, JSON.stringify(snapshot)]);
-		const rows = await tx.query<Row>("INSERT INTO release_tasks(site_id,id,idempotency_key,state,snapshot_id,base_sha) VALUES($1,$2,$3,'preparing',$4,$5) RETURNING *", [site, taskId, input.idempotencyKey, snapshotId, base.headSha]);
-		return taskRecord(rows[0]);
+		const now = new Date().toISOString();
+		collection(state, "release_snapshots")[snapshotId] = { id: snapshotId, digest, data: snapshot, created_at: now };
+		const task: ReleaseTaskRow = { id: taskId, kind: "publish", idempotency_key: input.idempotencyKey, state: "preparing", snapshot_id: snapshotId, base_sha: base.headSha, target_sha: null, production_sha: null, deployment_id: null, message: null, details: {}, fence: null, created_at: now, updated_at: now };
+		tasks[taskId] = task;
+		collection(state, "release_locks")[site] ||= { task_id: null, fencing_token: 0, lease_until: now };
+		return taskRecord(task);
 	});
 }
-
-export async function claimReleaseTask(db: Database, site: string, id: string, reconcileRestored = false, retryFailedDeployment = false): Promise<number | null> {
-	return db.transaction(async (tx) => {
-		const locks = await tx.query<Row>("SELECT * FROM release_locks WHERE site_id=$1 FOR UPDATE", [site]);
-		const lock = locks[0];
-		if (!lock) return null;
-		if (!reconcileRestored && (await tx.query("SELECT id FROM release_tasks WHERE site_id=$1 AND kind='publish' AND details->>'restoreRequiresReconciliation'='true' LIMIT 1", [site])).length) return null;
-		const [task] = await tx.query<ReleaseTaskRow>("SELECT * FROM release_tasks WHERE site_id=$1 AND id=$2 FOR UPDATE", [site, id]);
+function restoreActive(state: StoreState): boolean {
+	const lock = collection(state, "maintenance_locks").main;
+	return Boolean(lock?.kind === "restore" && new Date(String(lock.lease_until)).getTime() > Date.now());
+}
+function ownedLease(state: StoreState, site: string, id: string, fence: number): boolean {
+	const lock = collection(state, "release_locks")[site];
+	return !restoreActive(state) && Boolean(lock && lock.task_id === id && lock.fencing_token === fence && new Date(String(lock.lease_until)).getTime() > Date.now());
+}
+export async function claimReleaseTask(store: FileStore, site: string, id: string, reconcileRestored = false, retryFailedDeployment = false): Promise<number | null> {
+	return store.update((state) => {
+		assertSite(state, site);
+		if (restoreActive(state)) return null;
+		const lock = collection(state, "release_locks")[site];
+		const tasks = collection(state, "release_tasks");
+		if (!lock || !reconcileRestored && Object.values(tasks).some((row) => row.kind === "publish" && (row.details as Row)?.restoreRequiresReconciliation)) return null;
+		const task = tasks[id] as ReleaseTaskRow | undefined;
 		const retryFailed = retryFailedDeployment && task?.state === "failed" && typeof task.target_sha === "string" && /^[a-f0-9]{40}$/i.test(task.target_sha);
 		if (!task || task.kind !== "publish" || terminalStates.has(task.state) && !retryFailed || !reconcileRestored && (task.state === "blocked" || task.details?.restoreRequiresReconciliation)) return null;
-		const [lease] = await tx.query<Row>("SELECT lease_until>now() AS active FROM release_locks WHERE site_id=$1", [site]);
-		if (lock.task_id === id && lease.active) return null;
+		if (lock.task_id === id && new Date(String(lock.lease_until)).getTime() > Date.now()) return null;
 		if (lock.task_id && lock.task_id !== id) {
-			const owner = await tx.query<Row>("SELECT state FROM release_tasks WHERE site_id=$1 AND id=$2", [site, lock.task_id]);
-			// An expired lease never transfers an unfinished/unknown side effect to another task.
-			if (!owner[0] || !terminalStates.has(String(owner[0].state))) return null;
+			const owner = tasks[String(lock.task_id)];
+			if (!owner || !terminalStates.has(String(owner.state))) return null;
 		}
-		const rows = await tx.query<Row>("UPDATE release_locks SET task_id=$2,fencing_token=fencing_token+1,lease_until=now()+interval '150 seconds' WHERE site_id=$1 RETURNING fencing_token", [site, id]);
-		const fence = Number(rows[0].fencing_token);
-		await tx.query("UPDATE release_tasks SET fence=$3,state=CASE WHEN $5::boolean AND state='failed' AND target_sha IS NOT NULL THEN 'deploying' WHEN $4::boolean AND state='blocked' THEN CASE WHEN target_sha IS NULL THEN 'unknown' ELSE 'deploying' END ELSE state END,updated_at=now() WHERE site_id=$1 AND id=$2", [site, id, fence, reconcileRestored, retryFailed]);
+		const fence = Number(lock.fencing_token) + 1;
+		Object.assign(lock, { task_id: id, fencing_token: fence, lease_until: new Date(Date.now()+150_000).toISOString() });
+		task.fence = fence;
+		if (retryFailed) task.state = "deploying";
+		else if (reconcileRestored && task.state === "blocked") task.state = task.target_sha ? "deploying" : "unknown";
+		task.updated_at = new Date().toISOString();
 		return fence;
 	});
 }
-async function updateTask(db: Database, site: string, id: string, fence: number, state: string, fields: Row = {}): Promise<boolean> {
-	const rows = await db.query<Row>("UPDATE release_tasks SET state=$4,target_sha=COALESCE($5,target_sha),production_sha=COALESCE($6,production_sha),deployment_id=COALESCE($7,deployment_id),message=$8,details=details || $9::jsonb,updated_at=now() WHERE site_id=$1 AND id=$2 AND fence=$3 AND state NOT IN ('verified','failed','conflict','blocked') AND EXISTS(SELECT 1 FROM release_locks WHERE site_id=$1 AND task_id=$2 AND fencing_token=$3 AND lease_until>now()) RETURNING id", [site, id, fence, state, fields.targetSha || null, fields.productionSha || null, fields.deploymentId || null, fields.message || null, JSON.stringify(fields.details || {})]);
-	return rows.length === 1;
+function updateTaskState(state: StoreState, site: string, id: string, fence: number, status: string, fields: Row = {}): boolean {
+	const task = collection(state, "release_tasks")[id] as ReleaseTaskRow | undefined;
+	if (!task || task.fence !== fence || terminalStates.has(task.state) || task.state === "blocked" || !ownedLease(state, site, id, fence)) return false;
+	Object.assign(task, { state: status, target_sha: fields.targetSha || task.target_sha, production_sha: fields.productionSha || task.production_sha, deployment_id: fields.deploymentId || task.deployment_id, message: fields.message || null, details: { ...task.details, ...((fields.details || {}) as Row) }, updated_at: new Date().toISOString() });
+	return true;
 }
-async function renewReleaseLease(db: Database, site: string, id: string, fence: number): Promise<boolean> {
-	return (await db.query("UPDATE release_locks SET lease_until=now()+interval '150 seconds' WHERE site_id=$1 AND task_id=$2 AND fencing_token=$3 AND lease_until>now() RETURNING site_id", [site, id, fence])).length === 1;
+async function updateTask(store: FileStore, site: string, id: string, fence: number, state: string, fields: Row = {}): Promise<boolean> {
+	return store.update((current) => { assertSite(current, site); return updateTaskState(current, site, id, fence, state, fields); });
 }
+async function renewReleaseLease(store: FileStore, site: string, id: string, fence: number): Promise<boolean> {
+	return store.update((state) => { assertSite(state, site); if (!ownedLease(state, site, id, fence)) return false; collection(state, "release_locks")[site]!.lease_until = new Date(Date.now()+150_000).toISOString(); return true; });
+}
+async function releaseRow(store: FileStore, site: string, id: string): Promise<ReleaseTaskRow | undefined> { const state = await store.read(); assertSite(state, site); return collection(state, "release_tasks")[id] as ReleaseTaskRow | undefined; }
+async function snapshotRow(store: FileStore, site: string, id: string): Promise<Row | undefined> { const state = await store.read(); assertSite(state, site); return collection(state, "release_snapshots")[id]; }
+
 function refreshSnapshotFiles(snapshot: FrozenSnapshot): void {
 	snapshot.posts = snapshot.sources.map(({ id, filePath, slug, source }) => ({ id, filePath, slug, sourceSha256: sha256(source) }));
 	snapshot.digest = publicContentDigest(snapshot.posts, snapshot.settings, snapshot.redirects);
@@ -182,7 +202,7 @@ async function vercel<T>(path: string): Promise<T> {
 }
 export const deploymentProvider: DeploymentProvider = {
 	async verify(targetSha, snapshot) {
-		const projectId = process.env.VERCEL_BLOG_PROJECT_ID;
+		const projectId = vercelProjectId();
 		if (!projectId) throw new Error("Vercel blog project is not configured");
 		const listing = await vercel<{ deployments: Array<Row> }>(`/v6/deployments?projectId=${encodeURIComponent(projectId || "")}&target=production&limit=50`);
 		const deployment = listing.deployments.find((entry) => String((entry.meta as Row)?.githubCommitSha || (entry.gitSource as Row)?.sha || "") === targetSha);
@@ -212,73 +232,79 @@ export const deploymentProvider: DeploymentProvider = {
 };
 
 export type ReleaseDependencies = {
-	db?: Database; site?: string; github?: GitHubProvider; deployment?: DeploymentProvider; skipCapabilityCheck?: boolean;
+	store?: FileStore; site?: string; github?: GitHubProvider; deployment?: DeploymentProvider; skipCapabilityCheck?: boolean;
 	// Only an explicit authenticated reconcile action may inspect restored jobs.
 	reconcileRestored?: boolean;
 	// An authenticated operator may only recheck an already committed failed SHA.
 	retryFailedDeployment?: boolean;
 	prepareMedia?: (ids: string[], taskId: string, snapshot: FrozenSnapshot) => Promise<Record<string, string>>;
-	afterVerified?: (snapshot: FrozenSnapshot, db: Database, site: string) => Promise<void>;
+	afterVerified?: (snapshot: FrozenSnapshot, store: FileStore, site: string) => Promise<void>;
 };
-async function completeReleaseNotifications(id: string, db: Database, site: string, afterVerified?: ReleaseDependencies["afterVerified"]): Promise<void> {
-	const [task] = await db.query<ReleaseTaskRow>("SELECT * FROM release_tasks WHERE site_id=$1 AND id=$2", [site, id]);
-	if (!task || task.kind !== "publish" || task.state !== "verified" || task.details?.restored || task.details?.restoreRequiresReconciliation || task.details?.notificationState === "done") return;
-	if (!task.target_sha || task.production_sha !== task.target_sha || !task.deployment_id) throw new ApiFailure(409, "VERIFIED_RELEASE_REQUIRED", "通知待办的发布身份不完整");
-	const [record] = await db.query<Row>("SELECT data,digest FROM release_snapshots WHERE site_id=$1 AND id=$2", [site, task.snapshot_id]);
-	const snapshot = record?.data as FrozenSnapshot | undefined;
-	if (!snapshot || snapshot.id !== task.snapshot_id || snapshot.taskId !== id || snapshot.digest !== record.digest || publicContentDigest(snapshot.posts, snapshot.settings, snapshot.redirects) !== snapshot.digest) throw new ApiFailure(409, "SNAPSHOT_INTEGRITY_FAILED", "通知待办的冻结快照不完整");
-	if (afterVerified) await afterVerified(snapshot, db, site);
-	else { const { markFriendsPublished } = await import("./interactions.js"); await markFriendsPublished(snapshot.friendIds, id, snapshot.friendRevisions, { db, site }); }
-	const rows = await db.query("UPDATE release_tasks SET details=details || $4::jsonb,updated_at=now() WHERE site_id=$1 AND id=$2 AND state='verified' AND snapshot_id=$3 AND target_sha=production_sha AND NOT COALESCE((details->>'restored')::boolean,false) AND NOT COALESCE((details->>'restoreRequiresReconciliation')::boolean,false) RETURNING id", [site, id, snapshot.id, JSON.stringify({ notificationState: "done", notificationCompletedAt: new Date().toISOString() })]);
-	if (!rows.length) throw new ApiFailure(409, "RELEASE_NOTIFICATIONS_PENDING", "发布状态已变化，通知待办仍须核查");
+function releaseFinalized(task: ReleaseTaskRow): boolean {
+	return (task.details?.finalizationState ?? task.details?.notificationState) === "done";
 }
-
-/** Repairs committed notification hooks even after a Workflow has exhausted retries. */
-export async function reconcileVerifiedReleaseNotifications(db = getDatabase(), site = getSiteId()): Promise<void> {
-	const tasks = await db.query<Row>("SELECT id FROM release_tasks WHERE site_id=$1 AND kind='publish' AND state='verified' AND NOT COALESCE((details->>'restored')::boolean,false) AND NOT COALESCE((details->>'restoreRequiresReconciliation')::boolean,false) AND COALESCE(details->>'notificationState','pending')<>'done' ORDER BY created_at", [site]);
+async function completeReleaseFinalization(id: string, store: FileStore, site: string, afterVerified?: ReleaseDependencies["afterVerified"]): Promise<void> {
+	const task = await releaseRow(store, site, id);
+	if (!task || task.kind !== "publish" || task.state !== "verified" || task.details?.restored || task.details?.restoreRequiresReconciliation || releaseFinalized(task)) return;
+	if (!task.target_sha || task.production_sha !== task.target_sha || !task.deployment_id) throw new ApiFailure(409, "VERIFIED_RELEASE_REQUIRED", "发布收尾任务的身份不完整");
+	const record = await snapshotRow(store, site, task.snapshot_id); const snapshot = record?.data as FrozenSnapshot | undefined;
+	if (!snapshot || snapshot.id !== task.snapshot_id || snapshot.taskId !== id || snapshot.digest !== record?.digest || publicContentDigest(snapshot.posts, snapshot.settings, snapshot.redirects) !== snapshot.digest) throw new ApiFailure(409, "SNAPSHOT_INTEGRITY_FAILED", "发布收尾任务的冻结快照不完整");
+	if (afterVerified) await afterVerified(snapshot, store, site);
+	else { const { markFriendsPublished } = await import("./interactions.js"); await markFriendsPublished(snapshot.friendIds, id, snapshot.friendRevisions, { store, site }); }
+	const done = await store.update((state) => {
+		assertSite(state, site); const current = collection(state, "release_tasks")[id] as ReleaseTaskRow | undefined;
+		if (!current || current.state !== "verified" || current.snapshot_id !== snapshot.id || current.target_sha !== current.production_sha || current.details?.restored || current.details?.restoreRequiresReconciliation) return false;
+		current.details = { ...current.details, finalizationState: "done", finalizationCompletedAt: new Date().toISOString() }; current.updated_at = new Date().toISOString(); return true;
+	});
+	if (!done) throw new ApiFailure(409, "RELEASE_FINALIZATION_PENDING", "发布状态已变化，收尾任务仍须核查");
+}
+/** Repairs verified friend publication state after interrupted Workflow execution. */
+export async function reconcileVerifiedReleaseFinalization(store = getStore(), site = getSiteId()): Promise<void> {
+	const state = await store.read(); assertSite(state, site);
+	const tasks = Object.values(collection(state, "release_tasks")).filter((row) => row.kind === "publish" && row.state === "verified" && !(row.details as Row)?.restored && !(row.details as Row)?.restoreRequiresReconciliation && !releaseFinalized(row as ReleaseTaskRow)).sort((a,b) => String(a.created_at).localeCompare(String(b.created_at)));
 	let failed = false;
-	for (const task of tasks) try { await completeReleaseNotifications(String(task.id), db, site); } catch { failed = true; }
-	if (failed) throw new ApiFailure(503, "RELEASE_NOTIFICATIONS_PENDING", "部分已核验发布的通知待办尚未补齐；已保留记录，稍后继续核查");
+	for (const task of tasks) try { await completeReleaseFinalization(String(task.id), store, site); } catch { failed = true; }
+	if (failed) throw new ApiFailure(503, "RELEASE_FINALIZATION_PENDING", "部分已核验发布尚未完成友链状态更新；已保留记录，稍后继续核查");
 }
 export async function processReleaseTask(id: string, dependencies?: ReleaseDependencies): Promise<{ done: boolean; state: string }> {
-	if (!dependencies?.skipCapabilityCheck) assertPublishCapability();
-	const db = dependencies?.db || getDatabase(); const site = dependencies?.site || getSiteId(); const git = dependencies?.github || githubProvider; const deployment = dependencies?.deployment || deploymentProvider;
-	const [initial] = await db.query<ReleaseTaskRow>("SELECT * FROM release_tasks WHERE site_id=$1 AND id=$2", [site, id]);
+	if (!dependencies?.skipCapabilityCheck) await assertPublishCapability();
+	const store = dependencies?.store || getStore(); const site = dependencies?.site || getSiteId(); const git = dependencies?.github || githubProvider; const deployment = dependencies?.deployment || deploymentProvider;
+	const initial = await releaseRow(store, site, id);
 	if (!initial) throw new ApiFailure(404, "TASK_NOT_FOUND", "发布任务不存在");
 	if (initial.kind !== "publish") throw new ApiFailure(400, "NOT_A_PUBLISH_TASK", "维护任务不能进入发布流程");
 	const restored = Boolean(initial.details?.restoreRequiresReconciliation);
 	if ((initial.state === "blocked" || restored) && !dependencies?.reconcileRestored) return { done: false, state: "blocked" };
 	const retryFailed = Boolean(dependencies?.retryFailedDeployment && initial.state === "failed" && initial.target_sha);
 	if (terminalStates.has(initial.state) && !retryFailed) {
-		if (initial.state === "verified") await completeReleaseNotifications(id, db, site, dependencies?.afterVerified);
+		if (initial.state === "verified") await completeReleaseFinalization(id, store, site, dependencies?.afterVerified);
 		return { done: true, state: initial.state };
 	}
-	const fence = await claimReleaseTask(db, site, id, Boolean(dependencies?.reconcileRestored), retryFailed); if (fence === null) return { done: false, state: "queued" };
-	let task = (await db.query<ReleaseTaskRow>("SELECT * FROM release_tasks WHERE site_id=$1 AND id=$2", [site, id]))[0]!;
+	const fence = await claimReleaseTask(store, site, id, Boolean(dependencies?.reconcileRestored), retryFailed); if (fence === null) return { done: false, state: "queued" };
+	let task = (await releaseRow(store, site, id))!;
 	let target = task.target_sha;
 	let commitAttempted = false;
-	let notificationPending = false;
+	let finalizationPending = false;
 	let lostLease = false;
 	let heartbeatRunning = false;
 	const heartbeat = setInterval(() => {
 		if (heartbeatRunning || lostLease) return;
 		heartbeatRunning = true;
-		void renewReleaseLease(db, site, id, fence).then((active) => { if (!active) lostLease = true; }, () => { lostLease = true; }).finally(() => { heartbeatRunning = false; });
+		void renewReleaseLease(store, site, id, fence).then((active) => { if (!active) lostLease = true; }, () => { lostLease = true; }).finally(() => { heartbeatRunning = false; });
 	}, 30_000);
 	heartbeat.unref();
 	const retainLease = async () => {
-		if (lostLease || !await renewReleaseLease(db, site, id, fence)) { lostLease = true; throw new Error("Release lease was superseded"); }
+		if (lostLease || !await renewReleaseLease(store, site, id, fence)) { lostLease = true; throw new Error("Release lease was superseded"); }
 	};
 	const persistedState = async (): Promise<{ done: boolean; state: string }> => {
-		const [current] = await db.query<ReleaseTaskRow>("SELECT * FROM release_tasks WHERE site_id=$1 AND id=$2", [site, id]);
+		const current = await releaseRow(store, site, id);
 		return { done: Boolean(current && terminalStates.has(current.state)), state: current?.state || "unknown" };
 	};
 	try {
-		const [record] = await db.query<Row>("SELECT data,digest FROM release_snapshots WHERE site_id=$1 AND id=$2", [site, task.snapshot_id]);
+		const record = await snapshotRow(store, site, task.snapshot_id);
 		const snapshot = record?.data as FrozenSnapshot | undefined;
 		if (!snapshot || snapshot.id !== task.snapshot_id || snapshot.taskId !== id || snapshot.digest !== record?.digest || publicContentDigest(snapshot.posts, snapshot.settings, snapshot.redirects) !== snapshot.digest || snapshot.sources.some((source) => snapshot.posts.find((post) => post.id === source.id)?.sourceSha256 !== sha256(source.source))) throw new ApiFailure(409, "SNAPSHOT_INTEGRITY_FAILED", "冻结发布快照校验失败；保留记录并重新审核快照");
 		if (restored && !target && !["committing", "unknown"].includes(String(initial.details?.restorePreviousState))) {
-			await updateTask(db, site, id, fence, "failed", { message: "恢复的任务尚未提交；已保留草稿，重新选择当前版本并冻结后再发布", details: { restoreRequiresReconciliation: false, restoredTaskCanceled: true } });
+			await updateTask(store, site, id, fence, "failed", { message: "恢复的任务尚未提交；已保留草稿，重新选择当前版本并冻结后再发布", details: { restoreRequiresReconciliation: false, restoredTaskCanceled: true } });
 			return persistedState();
 		}
 		if (task.state === "preparing") {
@@ -289,17 +315,15 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 				if (dependencies?.prepareMedia) urls = await dependencies.prepareMedia(ids, id, snapshot);
 				else {
 					const { publishMediaForSnapshot } = await import("./media.js");
-					urls = await publishMediaForSnapshot(ids, id, { db, site, frozenMedia: snapshot.media });
+					urls = await publishMediaForSnapshot(ids, id, { store, site, frozenMedia: snapshot.media });
 				}
 				for (const source of snapshot.sources) source.source = replaceMedia(source.source, urls) as string;
 				snapshot.settings = replaceMedia(snapshot.settings, urls) as Record<string, unknown>;
 			}
 			refreshSnapshotFiles(snapshot);
-			const frozen = await db.transaction(async (tx) => {
-				await tx.query("SELECT site_id FROM release_locks WHERE site_id=$1 FOR UPDATE", [site]);
-				if (!await updateTask(tx, site, id, fence, "frozen")) return false;
-				await tx.query("UPDATE release_snapshots SET digest=$3,data=$4::jsonb WHERE site_id=$1 AND id=$2", [site, snapshot.id, snapshot.digest, JSON.stringify(snapshot)]);
-				return true;
+			const frozen = await store.update((state) => {
+				assertSite(state, site); if (!updateTaskState(state, site, id, fence, "frozen")) return false;
+				Object.assign(collection(state, "release_snapshots")[snapshot.id]!, { digest: snapshot.digest, data: snapshot }); return true;
 			});
 			if (!frozen) return persistedState();
 			task.state = "frozen";
@@ -308,17 +332,17 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 			await retainLease();
 			target = await git.findCommit(id, snapshot.digest);
 			if (!target) {
-				await updateTask(db, site, id, fence, "unknown", { message: "提交结果仍未知；禁止再次执行提交，先核查 Git 任务标记" });
+				await updateTask(store, site, id, fence, "unknown", { message: "提交结果仍未知；禁止再次执行提交，先核查 Git 任务标记" });
 				return persistedState();
 			}
-			if (!await updateTask(db, site, id, fence, "deploying", { targetSha: target })) return persistedState();
+			if (!await updateTask(store, site, id, fence, "deploying", { targetSha: target })) return persistedState();
 		}
 		if (!target) {
 			await retainLease();
 			const repository = await git.readRepositoryFiles();
 			if (repository.headSha !== task.base_sha) {
 				const diff = snapshot.files.filter((file) => repository.files.find((current) => current.path === file.path)?.source !== file.source).map((file) => ({ path: file.path, expectedSource: file.source, remoteSource: repository.files.find((current) => current.path === file.path)?.source ?? null }));
-				await updateTask(db, site, id, fence, "conflict", { message: "发布分支有未导入的外部修改，请比较差异后重新导入", details: { baseSha: task.base_sha, remoteSha: repository.headSha, diff } });
+				await updateTask(store, site, id, fence, "conflict", { message: "发布分支有未导入的外部修改，请比较差异后重新导入", details: { baseSha: task.base_sha, remoteSha: repository.headSha, diff } });
 				return persistedState();
 			}
 			const committedFiles = new Map(repository.files.map((file) => [file.path, file]));
@@ -326,107 +350,82 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 			for (const file of snapshot.files) committedFiles.set(file.path, file);
 			snapshot.repositoryFiles = [...committedFiles.values()];
 			await retainLease();
-			const committing = await db.transaction(async (tx) => {
-				await tx.query("SELECT site_id FROM release_locks WHERE site_id=$1 FOR UPDATE", [site]);
-				if (!await updateTask(tx, site, id, fence, "committing")) return false;
-				await tx.query("UPDATE release_snapshots SET data=$3::jsonb WHERE site_id=$1 AND id=$2", [site, snapshot.id, JSON.stringify(snapshot)]);
-				return true;
+			const committing = await store.update((state) => {
+				assertSite(state, site); if (!updateTaskState(state, site, id, fence, "committing")) return false;
+				collection(state, "release_snapshots")[snapshot.id]!.data = snapshot; return true;
 			});
 			if (!committing) return persistedState();
 			// Persist the intention before the only non-idempotent external side effect.
 			task.state = "committing";
 			commitAttempted = true;
 			target = await git.commit({ baseSha: task.base_sha, taskId: id, digest: snapshot.digest, files: snapshot.files, deletions: snapshot.deletions });
-			if (!await updateTask(db, site, id, fence, "deploying", { targetSha: target })) return persistedState();
+			if (!await updateTask(store, site, id, fence, "deploying", { targetSha: target })) return persistedState();
 		}
 		await retainLease();
 		const verified = await deployment.verify(target, snapshot);
 		if (verified.status === "failed") {
-			await updateTask(db, site, id, fence, "failed", { message: verified.message, deploymentId: verified.deploymentId, details: restored ? { restoreRequiresReconciliation: false } : {} });
+			await updateTask(store, site, id, fence, "failed", { message: verified.message, deploymentId: verified.deploymentId, details: restored ? { restoreRequiresReconciliation: false } : {} });
 			return persistedState();
 		}
 		if (verified.status !== "verified" || verified.sha !== target || !verified.deploymentId) {
-			await updateTask(db, site, id, fence, "deploying", { message: verified.message || "生产部署身份尚未完整核验" });
+			await updateTask(store, site, id, fence, "deploying", { message: verified.message || "生产部署身份尚未完整核验" });
 			return persistedState();
 		}
-		const finalized = await db.transaction(async (tx) => {
-			await tx.query("SELECT site_id FROM release_locks WHERE site_id=$1 FOR UPDATE", [site]);
-			const [baseline] = await tx.query<Row>("SELECT data FROM entities WHERE site_id=$1 AND kind='repository' AND id='baseline' FOR UPDATE", [site]);
-			const baselineHead = (baseline?.data as Row | undefined)?.headSha;
+		const finalized = await store.update((state) => {
+			assertSite(state, site); const entities = collection(state, "entities");
+			const baseline = entities["repository:baseline"]; const base = baseline?.data as Row | undefined; const baselineHead = base?.headSha;
 			if (baselineHead !== task.base_sha && baselineHead !== target) {
-				await updateTask(tx, site, id, fence, "conflict", { productionSha: target, deploymentId: verified.deploymentId, message: "生产版本已核验，但管理基线已推进；保留证据，须审阅后合并，不能回写旧基线", details: { baselineSha: baselineHead ?? null, verifiedSha: target } });
-				return false;
+				updateTaskState(state, site, id, fence, "conflict", { productionSha: target, deploymentId: verified.deploymentId, message: "生产版本已核验，但管理基线已推进；保留证据，须审阅后合并，不能回写旧基线", details: { baselineSha: baselineHead ?? null, verifiedSha: target } }); return false;
 			}
-			if (!await updateTask(tx, site, id, fence, "verified", { productionSha: target, deploymentId: verified.deploymentId, message: "Git、目标项目生产别名及两处发布清单已核验一致", details: { ...(restored ? { restoreRequiresReconciliation: false } : {}), notificationState: initial.details?.restored ? "skipped" : "pending" } })) return false;
-			for (const source of snapshot.sources) await tx.query("UPDATE entities SET data=jsonb_set(jsonb_set(data,'{publishedSource}',to_jsonb($3::text)),'{publishedRevision}',to_jsonb($4::int)),updated_at=now() WHERE site_id=$1 AND kind='post' AND id=$2", [site, source.id, source.source, source.revision]);
-			await tx.query("UPDATE entities SET data=(data - 'repositoryFiles') || $2::jsonb,updated_at=now() WHERE site_id=$1 AND kind='repository' AND id='baseline'", [site, JSON.stringify({ headSha: target, posts: snapshot.posts, redirects: snapshot.redirects, snapshotId: snapshot.id, taskId: id, publicContentDigest: snapshot.digest, publishedSettings: snapshot.settings.settings, publishedNavigation: snapshot.settings.navigation, publishedIcons: snapshot.settings.icons, ...(snapshot.repositoryFiles ? { repositoryFiles: snapshot.repositoryFiles } : {}), ...(snapshot.deploymentConfig ? { deploymentConfig: snapshot.deploymentConfig } : {}) })]);
-			await tx.query("UPDATE release_locks SET task_id=NULL,lease_until=now() WHERE site_id=$1 AND task_id=$2 AND fencing_token=$3", [site, id, fence]);
-			return true;
+			if (!updateTaskState(state, site, id, fence, "verified", { productionSha: target, deploymentId: verified.deploymentId, message: "Git、目标项目生产别名及两处发布清单已核验一致", details: { ...(restored ? { restoreRequiresReconciliation: false } : {}), finalizationState: initial.details?.restored ? "skipped" : "pending" } })) return false;
+			for (const source of snapshot.sources) { const post = entities[`post:${source.id}`]; if (post) { post.data = { ...(post.data as Row), publishedSource: source.source, publishedRevision: source.revision }; post.updated_at = new Date().toISOString(); } }
+			if (baseline && base) { delete base.repositoryFiles; Object.assign(base, { headSha: target, posts: snapshot.posts, redirects: snapshot.redirects, snapshotId: snapshot.id, taskId: id, publicContentDigest: snapshot.digest, publishedSettings: snapshot.settings.settings, publishedNavigation: snapshot.settings.navigation, publishedIcons: snapshot.settings.icons, ...(snapshot.repositoryFiles ? { repositoryFiles: snapshot.repositoryFiles } : {}), ...(snapshot.deploymentConfig ? { deploymentConfig: snapshot.deploymentConfig } : {}) }); baseline.updated_at = new Date().toISOString(); }
+			const lock = collection(state, "release_locks")[site]!; lock.task_id = null; lock.lease_until = new Date().toISOString(); return true;
 		});
 		if (!finalized) return persistedState();
-		// Replaying a verified task repairs an interrupted notification transaction.
-		if (!initial.details?.restored) try { await completeReleaseNotifications(id, db, site, dependencies?.afterVerified); } catch {
-			notificationPending = true;
-			throw new Error("Production is verified; the durable notification hook must be reconciled");
+		// Replaying a verified task repairs an interrupted friend state update.
+		if (!initial.details?.restored) try { await completeReleaseFinalization(id, store, site, dependencies?.afterVerified); } catch {
+			finalizationPending = true;
+			throw new Error("Production is verified; the durable release finalization must be reconciled");
 		}
 		return { done: true, state: "verified" };
 	} catch (error) {
-		if (notificationPending) throw error;
+		if (finalizationPending) throw error;
 		if (lostLease) return persistedState();
 		const state = error instanceof GitHubError && error.conflict && !error.uncertain ? "conflict" : !target && (commitAttempted || task.state === "unknown" || task.state === "committing" || error instanceof GitHubError && error.uncertain) ? "unknown" : target ? "deploying" : error instanceof ApiFailure && error.status < 500 ? "failed" : task.state;
-		await updateTask(db, site, id, fence, state, { message: error instanceof GitHubError || error instanceof ApiFailure ? error.message : "外部服务核验失败，请检查配置后继续核验" });
+		await updateTask(store, site, id, fence, state, { message: error instanceof GitHubError || error instanceof ApiFailure ? error.message : "外部服务核验失败，请检查配置后继续核验" });
 		return persistedState();
 	} finally {
 		clearInterval(heartbeat);
-		await db.query("UPDATE release_locks SET lease_until=now() WHERE site_id=$1 AND task_id=$2 AND fencing_token=$3", [site, id, fence]);
+		await store.update((state) => { assertSite(state, site); const lock = collection(state, "release_locks")[site]; if (lock?.task_id === id && lock.fencing_token === fence) lock.lease_until = new Date().toISOString(); });
 	}
 }
 export async function scheduleReleaseTask(id: string): Promise<void> {
 	const run = await start(publishWorkflow, [id]);
-	await getDatabase().query("UPDATE release_tasks SET workflow_id=$3,updated_at=now() WHERE site_id=$1 AND id=$2", [getSiteId(), id, run.runId]);
+	await getStore().update((state) => { const task = collection(state, "release_tasks")[id]; if (task) { task.workflow_id = run.runId; task.updated_at = new Date().toISOString(); } });
 }
 export function registerReleaseRoutes(app: AdminApp): void {
 	app.get("/api/repository", requireAdmin, async (c) => {
-		const [row] = await getDatabase().query<Row>("SELECT data FROM entities WHERE site_id=$1 AND kind='repository' AND id='baseline'", [getSiteId()]);
-		const data = row?.data as Row | undefined;
+		const row = collection(await getStore().read(), "entities")["repository:baseline"]; const data = row?.data as Row | undefined;
 		return c.json({ data: { headSha: typeof data?.headSha === "string" ? data.headSha : null, synchronizedAt: data?.synchronizedAt || null } });
 	});
 	app.post("/api/repository/sync", requireAdmin, async (c) => {
-		const input = await readJson(c.req.raw, 4096);
-		if (typeof input.expectedHeadSha !== "string") throw new ApiFailure(400, "BASELINE_REVISION_REQUIRED", "提供已读取基线的 expectedHeadSha");
-		return c.json({ data: await synchronizeRepository(getDatabase(), getSiteId(), input.expectedHeadSha) });
+		const input = await readJson(c.req.raw, 4096); if (typeof input.expectedHeadSha !== "string") throw new ApiFailure(400, "BASELINE_REVISION_REQUIRED", "提供已读取基线的 expectedHeadSha");
+		return c.json({ data: await synchronizeRepository(getStore(), getSiteId(), input.expectedHeadSha) });
 	});
 	app.post("/api/releases", requireAdmin, async (c) => {
-		assertPublishCapability();
-		const parsed = releaseInput.safeParse(await readJson(c.req.raw)); if (!parsed.success) throw new ApiFailure(400, "INVALID_RELEASE", "提供 postIds、expectedRevisions 和幂等键");
-		const task = await freezeRelease(parsed.data);
-		try { await scheduleReleaseTask(task.id); } catch { /* Durable task remains in DB; cron/open-dashboard reconcile resumes it. */ }
+		await assertPublishCapability(); const parsed = releaseInput.safeParse(await readJson(c.req.raw)); if (!parsed.success) throw new ApiFailure(400, "INVALID_RELEASE", "提供 postIds、expectedRevisions 和幂等键");
+		const task = await freezeRelease(parsed.data); try { await scheduleReleaseTask(task.id); } catch { /* Persisted task remains available for reconciliation. */ }
 		return c.json({ data: task }, 202);
 	});
-	app.get("/api/tasks", requireAdmin, async (c) => {
-		const rows = await getDatabase().query<Row>("SELECT * FROM release_tasks WHERE site_id=$1 ORDER BY created_at DESC LIMIT 100", [getSiteId()]);
-		return c.json({ data: rows.map(taskRecord) });
-	});
-	app.get("/api/tasks/:id", requireAdmin, async (c) => {
-		const rows = await getDatabase().query<Row>("SELECT * FROM release_tasks WHERE site_id=$1 AND id=$2", [getSiteId(), c.req.param("id")]);
-		if (!rows[0]) throw new ApiFailure(404, "TASK_NOT_FOUND", "任务不存在");
-		return c.json({ data: { ...taskRecord(rows[0]), details: rows[0].details } });
-	});
+	app.get("/api/tasks", requireAdmin, async (c) => { const rows = Object.values(collection(await getStore().read(), "release_tasks")).sort((a,b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0,100); return c.json({ data: rows.map(taskRecord) }); });
+	app.get("/api/tasks/:id", requireAdmin, async (c) => { const row = await releaseRow(getStore(), getSiteId(), c.req.param("id")); if (!row) throw new ApiFailure(404, "TASK_NOT_FOUND", "任务不存在"); return c.json({ data: { ...taskRecord(row), details: row.details } }); });
 	app.post("/api/tasks/:id/reconcile", requireAdmin, async (c) => {
-		const id = c.req.param("id");
-		const [task] = await getDatabase().query<Row>("SELECT kind,details FROM release_tasks WHERE site_id=$1 AND id=$2", [getSiteId(), id]);
-		if (!task) throw new ApiFailure(404, "TASK_NOT_FOUND", "任务不存在");
+		const id = c.req.param("id"); const task = await releaseRow(getStore(), getSiteId(), id); if (!task) throw new ApiFailure(404, "TASK_NOT_FOUND", "任务不存在");
 		if (task.kind === "publish") {
-			const restored = Boolean((task.details as Row)?.restoreRequiresReconciliation);
-			if (restored) {
-				const input = await readJson(c.req.raw, 4096);
-				if (input.reconcileRestored !== true) throw new ApiFailure(409, "RESTORED_PUBLISH_CONFIRMATION_REQUIRED", "恢复的任务须明确提供 reconcileRestored:true 后手工核查；不会重新提交旧草稿");
-			}
-			const result = await processReleaseTask(id, { reconcileRestored: restored, retryFailedDeployment: true });
-			if (!result.done && result.state !== "blocked") try { await scheduleReleaseTask(id); } catch { /* The persisted task remains available for authenticated/daily reconciliation. */ }
-		}
-		else { const { processMaintenanceTask } = await import("./maintenance.js"); await processMaintenanceTask(id); }
-		const rows = await getDatabase().query<Row>("SELECT * FROM release_tasks WHERE site_id=$1 AND id=$2", [getSiteId(), id]);
-		return c.json({ data: taskRecord(rows[0]) });
+			const restored = Boolean(task.details?.restoreRequiresReconciliation); if (restored) { const input = await readJson(c.req.raw, 4096); if (input.reconcileRestored !== true) throw new ApiFailure(409, "RESTORED_PUBLISH_CONFIRMATION_REQUIRED", "恢复的任务须明确提供 reconcileRestored:true 后手工核查；不会重新提交旧草稿"); }
+			const result = await processReleaseTask(id, { reconcileRestored: restored, retryFailedDeployment: true }); if (!result.done && result.state !== "blocked") try { await scheduleReleaseTask(id); } catch { /* Persisted task can be reconciled later. */ }
+		} else { const { processMaintenanceTask } = await import("./maintenance.js"); await processMaintenanceTask(id); }
+		return c.json({ data: taskRecord((await releaseRow(getStore(), getSiteId(), id))!) });
 	});
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PostRecord } from "../shared/contracts.js";
-import type { Database } from "./db.js";
+import { assertSite, collection, type FileStore, type Row } from "./file-store.js";
 import { ApiFailure, digest } from "./security.js";
 import { validatePostSource } from "./source-document.js";
 import { readRepositoryFiles } from "./github.js";
@@ -18,7 +18,7 @@ function baselineSlug(path: string): string {
 	return path.replace(/^src\/content\/posts\//, "").replace(/\.(?:md|mdx)$/i, "").replace(/(?:^|\/)index$/, "").replace(/\/$/, "");
 }
 
-export async function importRepository(database: Database, siteId: string, reader: RepositoryReader = readRepositoryFiles) {
+export async function importRepository(store: FileStore, siteId: string, reader: RepositoryReader = readRepositoryFiles) {
 	let repository: Awaited<ReturnType<typeof readRepositoryFiles>>;
 	try { repository = await reader(); }
 	catch (error) {
@@ -28,8 +28,8 @@ export async function importRepository(database: Database, siteId: string, reade
 		throw new ApiFailure(503, "GITHUB_REPOSITORY_UNAVAILABLE", "GitHub 仓库暂时无法读取；请检查受限 GitHub App 的仓库权限与网络连接");
 	}
 	const files: SourceFile[] = repository.files;
-	const state = repository.publishedState || readJsonFile(files, "src/data/published-state.json");
-	const mapping: PublishedPost[] = isRecord(state) && Array.isArray(state.posts) ? state.posts.filter(isRecord) as PublishedPost[] : [];
+	const publishedState = repository.publishedState || readJsonFile(files, "src/data/published-state.json");
+	const mapping: PublishedPost[] = isRecord(publishedState) && Array.isArray(publishedState.posts) ? publishedState.posts.filter(isRecord) as PublishedPost[] : [];
 	const managed = readJsonFile(files, "src/data/managed-settings.json");
 	const redirects = readJsonFile(files, "src/data/redirects.json");
 	const deploymentConfig = readJsonFile(files, "vercel.json");
@@ -37,16 +37,19 @@ export async function importRepository(database: Database, siteId: string, reade
 	if (!isRecord(managed) || !isRecord(managed.settings) || !isRecord(managed.navigation)) throw new ApiFailure(503, "BASELINE_CONFIGURATION_REQUIRED", "仓库须包含 src/data/managed-settings.json 的真实 settings/navigation 基线；不能用空配置替换主题");
 	const posts = files.filter((file) => /^src\/content\/posts\/.+\.(md|mdx)$/.test(file.path));
 	if (!posts.length) throw new ApiFailure(422, "REPOSITORY_POSTS_MISSING", "GitHub 仓库没有读取到文章源码");
-	return database.transaction(async (tx) => {
-		await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`${siteId}:repository-import`]);
-		const [existing] = await tx.query<Record<string, unknown> & { data: Record<string, unknown> }>("SELECT data FROM entities WHERE site_id=$1 AND kind='repository' AND id='baseline'", [siteId]);
+	return store.update((state) => {
+		assertSite(state, siteId);
+		const entities = collection(state, "entities");
+		const existing = entities["repository:baseline"] as (Row & { data: Record<string, unknown> }) | undefined;
 		if (existing) {
 			// Upgrade an earlier import only at the exact recorded Git revision.
 			// Post drafts and their published baseline remain unchanged.
-			if (existing.data.deploymentConfig === undefined && deploymentConfig !== undefined && existing.data.headSha === repository.headSha) await tx.query("UPDATE entities SET data=data || $2::jsonb,updated_at=now() WHERE site_id=$1 AND kind='repository' AND id='baseline'", [siteId, JSON.stringify({ deploymentConfig })]);
+			if (existing.data.deploymentConfig === undefined && deploymentConfig !== undefined && existing.data.headSha === repository.headSha) {
+				existing.data = { ...existing.data, deploymentConfig }; existing.updated_at = new Date().toISOString();
+			}
 			return { imported: false, headSha: existing.data.headSha, message: "管理基线已存在；不会覆盖草稿或重复发布" };
 		}
-		if ((await tx.query("SELECT id FROM entities WHERE site_id=$1 AND kind='post' LIMIT 1", [siteId])).length) throw new ApiFailure(409, "BASELINE_IMPORT_CONFLICT", "当前已有管理草稿但尚无仓库基线，请先处理导入冲突");
+		if (Object.values(entities).some(row => row.kind === "post")) throw new ApiFailure(409, "BASELINE_IMPORT_CONFLICT", "当前已有管理草稿但尚无仓库基线，请先处理导入冲突");
 		for (const file of posts) {
 			const metadata = validatePostSource(file.source);
 			const map = mapping.find((item) => (item.filePath || item.path) === file.path) || mapping.find((item) => item.slug === baselineSlug(file.path));
@@ -55,12 +58,14 @@ export async function importRepository(database: Database, siteId: string, reade
 			const draft = metadata.draft === true;
 			const post: PostRecord = { id: map?.id || randomUUID(), filePath: file.path, slug, title: String(metadata.title), published: String(metadata.published), draft, format: file.path.endsWith(".mdx") ? "mdx" : "md", source: file.source, metadata, revision: 1, publishedRevision: draft ? null : 1, publishedSource: draft ? null : file.source, updatedAt: new Date().toISOString() };
 			if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(post.id)) throw new ApiFailure(422, "BASELINE_ID_INVALID", `文章 ${file.path} 的稳定 ID 须为 UUID`);
-			await tx.query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,'post',$2,$3::jsonb)", [siteId, post.id, JSON.stringify(post)]);
+			if (entities[`post:${post.id}`] || Object.values(entities).some(row => row.kind === "post" && (row.data as PostRecord).slug === slug)) throw new ApiFailure(409, "BASELINE_IMPORT_CONFLICT", "仓库中存在重复的文章稳定 ID 或固定网址");
+			entities[`post:${post.id}`] = { id: post.id, kind: "post", data: post, revision: 1, created_at: post.updatedAt, updated_at: post.updatedAt };
 		}
-		for (const kind of ["settings", "navigation"] as const) await tx.query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,$2,'default',$3::jsonb)", [siteId, kind, JSON.stringify(managed[kind])]);
-		if (isRecord(managed.icons)) await tx.query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,'icons','default',$2::jsonb)", [siteId, JSON.stringify(managed.icons)]);
-		const baseline = { headSha: repository.headSha, repositoryFiles: files, snapshotId: isRecord(state) ? state.snapshotId || null : null, importedAt: new Date().toISOString(), importedPosts: posts.length, publishedSettings: managed.settings, publishedNavigation: managed.navigation, publishedIcons: managed.icons || {}, publishedState: state || null, posts: mapping, redirects: Array.isArray(redirects) ? redirects : [], ...(deploymentConfig !== undefined ? { deploymentConfig } : {}) };
-		await tx.query("INSERT INTO entities(site_id,kind,id,data) VALUES($1,'repository','baseline',$2::jsonb)", [siteId, JSON.stringify(baseline)]);
+		const now = new Date().toISOString();
+		for (const kind of ["settings", "navigation"] as const) entities[`${kind}:default`] = { id: "default", kind, data: managed[kind], revision: 1, created_at: now, updated_at: now };
+		if (isRecord(managed.icons)) entities["icons:default"] = { id: "default", kind: "icons", data: managed.icons, revision: 1, created_at: now, updated_at: now };
+		const baseline = { headSha: repository.headSha, repositoryFiles: files, snapshotId: isRecord(publishedState) ? publishedState.snapshotId || null : null, importedAt: new Date().toISOString(), importedPosts: posts.length, publishedSettings: managed.settings, publishedNavigation: managed.navigation, publishedIcons: managed.icons || {}, publishedState: publishedState || null, posts: mapping, redirects: Array.isArray(redirects) ? redirects : [], ...(deploymentConfig !== undefined ? { deploymentConfig } : {}) };
+		entities["repository:baseline"] = { id: "baseline", kind: "repository", data: baseline, revision: 1, created_at: now, updated_at: now };
 		return { imported: true, headSha: repository.headSha, records: posts.length, publicPosts: posts.filter((file) => validatePostSource(file.source).draft !== true).length };
 	});
 }
@@ -74,10 +79,11 @@ export function compareRepositoryFiles(expected: SourceFile[], remote: SourceFil
 	});
 }
 
-/** Only code-only Git changes may advance the baseline. Private SQL drafts stay untouched. */
-export async function synchronizeRepository(database: Database, siteId: string, expectedHeadSha: string, reader: RepositoryReader = readRepositoryFiles) {
+/** Only code-only Git changes may advance the baseline. Private file drafts stay untouched. */
+export async function synchronizeRepository(store: FileStore, siteId: string, expectedHeadSha: string, reader: RepositoryReader = readRepositoryFiles) {
 	if (!/^[a-f0-9]{40}$/i.test(expectedHeadSha)) throw new ApiFailure(400, "BASELINE_REVISION_REQUIRED", "提供已读取基线的完整 expectedHeadSha");
-	const [initial] = await database.query<Record<string, unknown> & { data: Record<string, unknown> }>("SELECT data FROM entities WHERE site_id=$1 AND kind='repository' AND id='baseline'", [siteId]);
+	const initialState = await store.read(); assertSite(initialState, siteId);
+	const initial = collection(initialState, "entities")["repository:baseline"] as (Row & { data: Record<string, unknown> }) | undefined;
 	if (!initial) throw new ApiFailure(409, "BASELINE_REQUIRED", "先导入仓库基线，再核对代码更新");
 	if (initial.data.headSha !== expectedHeadSha) throw new ApiFailure(409, "BASELINE_REVISION_CONFLICT", "仓库基线已变化，请刷新后重新核对");
 	const remote = await reader();
@@ -93,16 +99,14 @@ export async function synchronizeRepository(database: Database, siteId: string, 
 	}
 	if (evidence.some((file) => !isRecord(file) || typeof file.path !== "string" || typeof file.source !== "string") || new Set(evidence.map((file) => file.path)).size !== evidence.length) throw new ApiFailure(409, "BASELINE_EVIDENCE_INVALID", "基线文件证据不完整，保留草稿并人工检查");
 	const differences = compareRepositoryFiles(evidence, remote.files);
-	return database.transaction(async (tx) => {
-		await tx.query("SELECT pg_advisory_xact_lock_shared(hashtext($1))", [`${siteId}:production-write`]);
-		await tx.query("INSERT INTO release_locks(site_id) VALUES($1) ON CONFLICT DO NOTHING", [siteId]);
-		await tx.query("SELECT site_id FROM release_locks WHERE site_id=$1 FOR UPDATE", [siteId]);
-		const [current] = await tx.query<Record<string, unknown> & { data: Record<string, unknown> }>("SELECT data FROM entities WHERE site_id=$1 AND kind='repository' AND id='baseline' FOR UPDATE", [siteId]);
+	return store.update((state) => {
+		assertSite(state, siteId);
+		const current = collection(state, "entities")["repository:baseline"] as (Row & { data: Record<string, unknown> }) | undefined;
 		if (current?.data.headSha !== expectedHeadSha) throw new ApiFailure(409, "BASELINE_REVISION_CONFLICT", "核对期间仓库基线已变化，请重新读取");
-		if ((await tx.query("SELECT id FROM release_tasks WHERE site_id=$1 AND kind='publish' AND (state NOT IN ('verified','failed','conflict') OR details->>'restoreRequiresReconciliation'='true') LIMIT 1", [siteId])).length) throw new ApiFailure(409, "PUBLISH_RECONCILIATION_REQUIRED", "先核查所有未完成或恢复的发布，再同步代码基线");
+		if (Object.values(collection(state, "release_tasks")).some(row => row.kind === "publish" && (!["verified", "failed", "conflict"].includes(String(row.state)) || (row.details as Row | undefined)?.restoreRequiresReconciliation === true))) throw new ApiFailure(409, "PUBLISH_RECONCILIATION_REQUIRED", "先核查所有未完成或恢复的发布，再同步代码基线");
 		if (differences.length) throw new ApiFailure(409, "MANAGED_REPOSITORY_CONFLICT", "远端管理内容已变更；请审阅逐文件差异并通过独立合并处理，未推进基线且保留全部私有草稿", { baseSha: expectedHeadSha, remoteSha: remote.headSha, diff: differences });
-		const rows = await tx.query("UPDATE entities SET data=data || $3::jsonb,updated_at=now() WHERE site_id=$1 AND kind='repository' AND id='baseline' AND data->>'headSha'=$2 RETURNING id", [siteId, expectedHeadSha, JSON.stringify({ headSha: remote.headSha, repositoryFiles: remote.files, synchronizedAt: new Date().toISOString() })]);
-		if (!rows.length) throw new ApiFailure(409, "BASELINE_REVISION_CONFLICT", "仓库基线已变化，请重新核对");
+		current.data = { ...current.data, headSha: remote.headSha, repositoryFiles: remote.files, synchronizedAt: new Date().toISOString() };
+		current.updated_at = new Date().toISOString(); current.revision = Number(current.revision) + 1;
 		return { synchronized: true, previousHeadSha: expectedHeadSha, headSha: remote.headSha, managedFiles: remote.files.length, message: "已确认管理文件字节完全相同，代码基线已同步；所有私有草稿保持原版本" };
 	});
 }

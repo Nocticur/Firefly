@@ -1,3 +1,7 @@
+> 历史记录：2026-10-15 起后台改用无数据库文件存储。本文中的数据库架构、迁移步骤和旧测试结果不代表当前实现；当前配置见 [environment-variables.md](./environment-variables.md)。
+
+> 历史回执：此处记录创建空占位项的操作。2026-10-14 已按用户要求精简，当前清单见 [环境变量说明](./environment-variables.md)，清理结果见 [精简回执](./vercel-env-simplification-2026-10-14.md)。
+
 # 统一项目环境变量添加回执
 
 日期：2026-10-13（Asia/Shanghai）。本回执只记录变量名称、范围和保存类型，不包含秘密值。
