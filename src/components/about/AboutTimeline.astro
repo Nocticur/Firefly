@@ -1,0 +1,92 @@
+---
+import type { AboutMilestone } from "@/data/about";
+
+interface Props {
+	items: AboutMilestone[];
+}
+const { items } = Astro.props;
+---
+<ol class="about-timeline not-prose">
+	{items.map((item) => (
+		<li><div class="timeline-date">{item.date ? <time datetime={item.date}>{item.label}</time> : <span>{item.label}</span>}</div><span class="timeline-track" aria-hidden="true"><span></span></span><div class="timeline-card"><h3>{item.title}</h3><p>{item.description}</p></div></li>
+	))}
+</ol>
+<style>
+	.about-timeline {
+		display: grid;
+		list-style: none;
+		margin: 1.5rem 0 2rem;
+		padding: 0;
+	}
+	.about-timeline li {
+		display: grid;
+		grid-template-columns: 6.5rem 1.5rem minmax(0, 1fr);
+		gap: 1rem;
+		margin: 0;
+		padding: 0;
+	}
+	.timeline-date {
+		padding-top: 1.05rem;
+		color: var(--content-meta);
+		font-size: 0.8rem;
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+	}
+	.timeline-track {
+		position: relative;
+		display: flex;
+		justify-content: center;
+		padding-top: 1.35rem;
+	}
+	.timeline-track::after {
+		position: absolute;
+		top: 1.7rem;
+		bottom: -1.35rem;
+		width: 2px;
+		background: var(--line-divider);
+		content: "";
+	}
+	li:last-child .timeline-track::after {
+		display: none;
+	}
+	.timeline-track > span {
+		position: relative;
+		z-index: 1;
+		flex-shrink: 0;
+		width: 0.65rem;
+		height: 0.65rem;
+		border-radius: 50%;
+		background: var(--primary);
+		box-shadow: 0 0 0 5px color-mix(in srgb, var(--primary) 12%, transparent);
+	}
+	.timeline-card {
+		margin-bottom: 1rem;
+		padding: 1rem 1.1rem;
+		border: 1px solid var(--line-divider);
+		border-radius: 0.9rem;
+	}
+	.timeline-card h3 {
+		margin: 0 0 0.4rem;
+		color: var(--btn-content);
+		font-size: 1rem;
+		font-weight: 650;
+	}
+	.timeline-card p {
+		margin: 0;
+		color: var(--content-meta);
+		font-size: 0.875rem;
+		line-height: 1.8;
+	}
+	@media (max-width: 600px) {
+		.about-timeline li {
+			grid-template-columns: 4.8rem 0.8rem minmax(0, 1fr);
+			gap: 0.6rem;
+		}
+		.timeline-date {
+			font-size: 0.7rem;
+		}
+		.timeline-card {
+			padding: 0.875rem;
+		}
+	}
+</style>

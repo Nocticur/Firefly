@@ -210,7 +210,7 @@ test("the migration baseline contains 16 article records and exactly 15 public U
 		nodir: true,
 	});
 	let publicCount = 0;
-	for (const file of files) {
+	for (const file of files.map((entry) => entry.replaceAll("\\", "/"))) {
 		const bytes = await readFile(path.join(repoRoot, file), "utf8");
 		if (matter(bytes).data.draft === true) {
 			assert.equal(

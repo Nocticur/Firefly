@@ -3,7 +3,8 @@ import { i18n } from "@i18n/translation";
 import { getSortedPosts } from "@utils/content-utils";
 import { url } from "@utils/url-utils";
 import type { APIRoute } from "astro";
-import { siteConfig } from "@/config";
+import { siteConfig, sponsorConfig } from "@/config";
+import { isPageAvailable } from "@/utils/page-availability";
 
 export const prerender = true;
 
@@ -88,7 +89,13 @@ export const GET: APIRoute = async ({ site }) => {
 	const abs = (path: string) => new URL(url(path), base).href;
 
 	const enabledPages = KEY_PAGES.filter(
-		(pageEntry) => !pageEntry.pageKey || siteConfig.pages[pageEntry.pageKey],
+		(pageEntry) =>
+			!pageEntry.pageKey ||
+			isPageAvailable(
+				pageEntry.pageKey,
+				siteConfig.pages,
+				sponsorConfig.enable,
+			),
 	);
 	const posts = await getSortedPosts();
 	const recentPosts = posts.slice(0, RECENT_POSTS_COUNT);

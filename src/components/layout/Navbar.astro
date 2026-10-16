@@ -140,6 +140,7 @@ const links: NavBarLink[] = resolveNavMenuLinks();
                         aria-label={i18n(I18nKey.videoPlay)}
 						class="btn-plain scale-animation rounded-lg h-11 w-11 active:scale-90 hidden md:flex"
                         id="bg-player-toggle"
+						aria-pressed="false"
                         data-i18n-play={i18n(I18nKey.videoPlay)}
                         data-i18n-pause={i18n(I18nKey.videoPause)}
                     >
@@ -297,6 +298,7 @@ function loadButtonScript() {
             var label = playing ? i18nPause : i18nPlay;
             bgPlayerBtn!.setAttribute("title", label);
             bgPlayerBtn!.setAttribute("aria-label", label);
+			bgPlayerBtn!.setAttribute("aria-pressed", String(playing));
         }
         window.addEventListener("bg-player-state-change", function (e) {
             var ce = e as CustomEvent;

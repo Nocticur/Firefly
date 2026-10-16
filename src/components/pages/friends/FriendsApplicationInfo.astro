@@ -1,0 +1,64 @@
+---
+import { Icon } from "astro-icon/components";
+import { profileConfig, siteConfig } from "@/config";
+import ImageWrapper from "@/components/common/ImageWrapper.astro";
+
+const profileAvatar = profileConfig.avatar || "/assets/images/logo-nocticur.png";
+const avatar = profileAvatar.startsWith("/")
+	? new URL(profileAvatar, siteConfig.site_url).href
+	: profileAvatar;
+const fields = [
+	{ label: "站点名称", value: siteConfig.title },
+	{ label: "站点描述", value: siteConfig.description || profileConfig.bio },
+	{ label: "站点链接", value: siteConfig.site_url },
+	{ label: "头像链接", value: avatar },
+];
+const application = ["站点名称：您的站点名称", "站点描述：您的站点描述", "站点链接：https://您的域名/", "头像链接：https://您的域名/avatar.png"].join("\n");
+const contacts = profileConfig.links.filter((link) => /^(mailto:|https:\/\/(qm\.qq\.com|space\.bilibili\.com)\/)/.test(link.url));
+const notes = [
+	{ title: "互换原则", text: "申请前请先添加本站友链，并提供可访问的友链页面地址。" },
+	{ title: "站点要求", text: "支持 HTTPS，以原创内容为主，内容积极健康，保持正常访问与持续更新。" },
+	{ title: "链接维护", text: "检测异常的站点会暂存观察，长期失联进入档案；恢复后自动回到友链列表。" },
+	{ title: "信息更新", text: "域名、头像或简介有变动时，请通过下方联系方式告知，方便及时更新。" },
+];
+---
+
+<friends-application-info class="not-prose">
+  <div class="friend-application-columns">
+    <section class="friend-info-panel" aria-labelledby="friend-site-heading">
+      <div class="friend-site-heading">
+        <div class="friend-site-avatar"><ImageWrapper src={profileAvatar} alt="" widths={[128]} sizes="64px" loading="lazy" fadeIn={false} /><span aria-hidden="true">✓</span></div>
+        <div><h3 id="friend-site-heading">{siteConfig.title}</h3><p>{siteConfig.description}</p></div>
+      </div>
+      <div class="friend-copy-fields">
+        {fields.map((field) => <div class="friend-copy-field">
+          <div><span>{field.label}</span><p>{field.value}</p></div>
+          <button type="button" data-copy-value={field.value} aria-label={"复制" + field.label} title={"复制" + field.label}><Icon name="material-symbols:content-copy-outline" /><span class="sr-only">复制</span></button>
+        </div>)}
+      </div>
+    </section>
+    <section class="friend-info-panel" aria-labelledby="friend-apply-heading">
+      <h3 id="friend-apply-heading" class="friend-apply-heading"><span><Icon name="material-symbols:assignment-outline" /></span>申请友链</h3>
+      <ol class="friend-application-steps">
+        <li><span class="friend-step-number" aria-hidden="true">1</span><div><h4>添加本站友链</h4><p>请先在您的友链页面添加本站，可直接复制左侧各项信息。</p></div></li>
+        <li><span class="friend-step-number" aria-hidden="true">2</span><div><h4>提交申请</h4><p>通过邮件或 QQ 联系我，附上站点信息和友链页面地址。</p>
+          <div class="friend-application-template"><pre>{application}</pre><button type="button" data-copy-value={application} aria-label="复制友链申请模板" title="复制申请模板"><Icon name="material-symbols:content-copy-outline" /></button></div>
+          <div class="friend-contact-links">
+            {contacts.map((contact) => <a href={contact.url} target={contact.url.startsWith("mailto:") ? undefined : "_blank"} rel={contact.url.startsWith("mailto:") ? undefined : "noopener noreferrer"}><Icon name={contact.icon} />{contact.url.startsWith("mailto:") ? "发送邮件" : contact.name}</a>)}
+          </div>
+        </div></li>
+        <li><span class="friend-step-number" aria-hidden="true">3</span><div><h4>等待审核</h4><p>确认信息与内容无误后添加，正式发布后即可在本页看到。</p></div></li>
+      </ol>
+    </section>
+  </div>
+  <p class="friend-copy-status" data-copy-status role="status" aria-live="polite" />
+  <div class="friend-manual-copy" data-manual-copy hidden><label>可长按或选中后手动复制<textarea readonly rows="4" aria-label="手动复制内容" /></label></div>
+  <section class="friend-info-panel friend-notes" aria-labelledby="friend-notes-heading">
+    <h3 id="friend-notes-heading"><Icon name="material-symbols:info-outline" />注意事项</h3>
+    <ul>{notes.map((note) => <li><strong>{note.title}</strong><span>：{note.text}</span></li>)}</ul>
+  </section>
+</friends-application-info>
+
+<script>
+  import "./application-info";
+</script>

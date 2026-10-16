@@ -1,6 +1,12 @@
+import InlineProfile from "@/components/about/InlineProfile.astro";
+import TechStack from "@/components/about/TechStack.astro";
+import AboutTimeline from "@/components/about/AboutTimeline.astro";
+import SocialGrid from "@/components/about/SocialGrid.astro";
+import { aboutProfile, siteTechnologies, aboutMilestones, aboutSocials } from "@/data/about";
+
 # 关于我 / About Me
 
-你好！我是 **Nocticur**。
+你好！我是 <InlineProfile {...aboutProfile} />。
 
 Nocticur的博客，记录个人学习、工作、AI相关的内容。
 
@@ -9,10 +15,17 @@ Nocticur的博客，记录个人学习、工作、AI相关的内容。
 
 ## 联系方式
 
-- GitHub：[Nocticur](https://github.com/Nocticur)
-- B站：[属于夜幕之人](https://space.bilibili.com/645892937)
-- QQ群：[源站群聊入口](https://qm.qq.com/q/2R07cjGTZ0)
-- 邮箱：[youjinmian@outlook.com](mailto:youjinmian@outlook.com)
+<SocialGrid items={aboutSocials} />
+
+## 本站技术
+
+下面是这个博客实际使用的技术，点击条目可以展开说明。
+
+<TechStack items={siteTechnologies} />
+
+## 记录的起点
+
+<AboutTimeline items={aboutMilestones} />
 
 ## 🛠️ 关于本站
 

@@ -4,7 +4,6 @@ import ClientPagination from "@/components/common/ClientPagination.svelte";
 import { formatTimezoneOffset } from "@/utils/date-utils";
 import { fetchMemos } from "@/utils/memos-adapter";
 import { registerDynamicGallery } from "./dynamic-gallery";
-import { registerDynamicInlineComments } from "./dynamic-inline-comments";
 
 type DynamicImage = {
 	alt: string;
@@ -279,7 +278,6 @@ $effect(() => {
 
 onMount(() => {
 	registerDynamicGallery();
-	registerDynamicInlineComments();
 	const page = list.closest(".page-shell");
 	template =
 		page?.querySelector<HTMLTemplateElement>("[data-dynamic-item-template]") ??

@@ -19,7 +19,7 @@ const showTitle = widgetConfig?.showTitle !== false;
 ---
 
 <!-- 组件显示现在由sidebarLayoutConfig统一控制，无需检查config.enable -->
-<WidgetLayout
+{config.enable !== false && (config.items === undefined || config.items.some((item) => item.enabled !== false && item.content.trim())) && <WidgetLayout
   name={config.title || i18n(I18nKey.announcement)}
   showTitle={showTitle}
   id="announcement"
@@ -62,4 +62,4 @@ const showTitle = widgetConfig?.showTitle !== false;
       }
     </div>
   </div>
-</WidgetLayout>
+</WidgetLayout>}

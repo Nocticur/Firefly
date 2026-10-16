@@ -1,0 +1,67 @@
+---
+import { Icon } from "astro-icon/components";
+import MusicPlayer from "@/components/features/MusicPlayer.astro";
+import { musicPlayerConfig } from "@/config/musicConfig";
+---
+
+{musicPlayerConfig.showFloatingPlayer && (
+	<floating-music-player hidden class="floating-music-player card-base" aria-label="悬浮音乐播放器">
+		<div class="floating-music-player__heading">
+			<span>正在聆听</span>
+			<button type="button" data-floating-music-close aria-label="隐藏悬浮播放器，音乐继续播放" title="隐藏播放器，音乐继续播放"><Icon name="material-symbols:close-rounded" /></button>
+		</div>
+		<MusicPlayer id="floating-music-widget" />
+		{musicPlayerConfig.showLyrics && <p data-floating-music-lyric hidden aria-live="off"></p>}
+	</floating-music-player>
+)}
+
+<script>
+	class FloatingMusicPlayer extends HTMLElement {
+		private abort?: AbortController;
+		private dismissed = false;
+		private restored = false;
+		connectedCallback() {
+			if (this.abort) return;
+			this.abort = new AbortController();
+			const { signal } = this.abort;
+			try { this.dismissed = localStorage.getItem("firefly:music-floating:hidden") === "true"; } catch { /* Storage can be unavailable in private contexts. */ }
+			const sync = () => {
+				const state = window.__fireflyMusic?.getState();
+				this.hidden = this.dismissed || !(this.restored || state?.isPlaying);
+				const lyric = this.querySelector<HTMLElement>("[data-floating-music-lyric]");
+				if (!lyric) return;
+				const line = state?.lyrics[state.currentLrcIndex]?.text;
+				lyric.hidden = !state?.isPlaying || !line;
+				lyric.textContent = lyric.hidden ? "" : line || "";
+			};
+			this.querySelector("[data-floating-music-close]")?.addEventListener("click", () => {
+				this.dismissed = true;
+				this.restored = false;
+				try { localStorage.setItem("firefly:music-floating:hidden", "true"); } catch { /* Keep the preference in memory. */ }
+				sync();
+			}, { signal });
+			window.addEventListener("firefly:music-floating:restore", () => {
+				this.dismissed = false;
+				this.restored = true;
+				try { localStorage.removeItem("firefly:music-floating:hidden"); } catch { /* Keep the preference in memory. */ }
+				sync();
+			}, { signal });
+			for (const event of ["fm:init", "fm:play-state", "fm:track", "fm:lyrics", "fm:lrc-index"]) window.addEventListener(event, sync, { signal });
+			sync();
+		}
+		disconnectedCallback() { this.abort?.abort(); this.abort = undefined; }
+	}
+	if (!customElements.get("floating-music-player")) customElements.define("floating-music-player", FloatingMusicPlayer);
+</script>
+
+<style>
+	.floating-music-player { position: fixed; inset: auto auto 1rem 1rem; z-index: 900; width: min(20rem, calc(100vw - 5.5rem)); padding: 0.9rem 1rem; border: 1px solid var(--line-divider); box-shadow: 0 0.5rem 2rem rgb(0 0 0 / 0.12); }
+	.floating-music-player[hidden] { display: none; }
+	.floating-music-player__heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; color: var(--content-meta); font-size: 0.75rem; }
+	button { display: grid; place-items: center; width: 2.25rem; height: 2.25rem; border-radius: 50%; cursor: pointer; color: var(--primary); }
+	button:hover { background: var(--btn-regular-bg); }
+	button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+	[data-floating-music-lyric] { margin-top: 0.75rem; color: var(--primary); text-align: center; font-size: 0.85rem; line-height: 1.6; }
+	@media (max-width: 767px) { .floating-music-player { bottom: max(0.75rem, env(safe-area-inset-bottom)); left: 0.75rem; max-height: 65dvh; overflow: auto; } }
+	@media (prefers-reduced-motion: reduce) { :global(.floating-music-player *) { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+</style>

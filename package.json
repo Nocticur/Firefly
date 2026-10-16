@@ -22,7 +22,10 @@
     "lint": "biome check --write ./src ./scripts",
     "preinstall": "node scripts/check-package-manager.mjs",
     "lqips": "pnpm exec tsx scripts/generate-lqips.ts",
-    "github-cards": "pnpm exec tsx scripts/generate-github-card-data.ts"
+    "github-cards": "pnpm exec tsx scripts/generate-github-card-data.ts",
+    "check-friends": "tsx scripts/check-friends.ts",
+    "test:site": "tsx --test src/utils/*.test.ts scripts/friend-monitor-core.test.ts",
+    "test:browser": "node scripts/verify-blog-polish.mjs"
   },
   "dependencies": {
     "@astrojs/check": "^0.9.10",
@@ -105,6 +108,7 @@
     "@vercel/routing-utils": "6.6.0",
     "esbuild": "^0.28.2",
     "pinyin-pro": "^3.29.3",
+    "playwright": "1.58.2",
     "postcss-import": "^16.1.1",
     "postcss-nesting": "^14.0.1",
     "rehype-callouts": "^2.2.0",

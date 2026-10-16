@@ -111,7 +111,7 @@
     opacity: 0;
     z-index: 2;
     transition-property: opacity, transform;
-    transition-duration: 1000ms;
+    transition-duration: 520ms;
     transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
     pointer-events: none;
 }
@@ -151,13 +151,20 @@
 }
 .effect-kenburns .slide-item {
     opacity: 0;
-    transition: opacity 800ms ease-in-out;
+    transition: opacity 520ms ease-in-out;
     animation: kenburns var(--carousel-interval, 5000ms) ease-out infinite;
     animation-play-state: paused;
 }
 .effect-kenburns .slide-item.active {
     opacity: 1;
     animation-play-state: running;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .slide-item, .effect-kenburns .slide-item {
+        transition: none !important;
+        animation: none !important;
+    }
 }
 
 /* 当banner被禁用时的布局样式 */

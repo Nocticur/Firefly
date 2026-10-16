@@ -9,6 +9,7 @@ import FontSetup from "@components/features/FontSetup.astro";
 import GithubCardManager from "@components/features/GithubCardManager.astro";
 import MusicManager from "@components/features/MusicManager.astro";
 import MusicPlayerView from "@components/features/MusicPlayerView.astro";
+import FloatingMusicPlayer from "@components/features/FloatingMusicPlayer.astro";
 import SakuraEffect from "@components/features/SakuraEffect.astro";
 import WavesEffect from "@components/features/WavesEffect.astro";
 import ConfigCarrier from "@components/layout/ConfigCarrier.astro";
@@ -568,11 +569,12 @@ const ogImageAlt = propsOgImageAlt ?? pageTitle;
     {shouldShowTopHighlight && <div class="top-gradient-highlight" />}
     <ConfigCarrier />
     <MusicManager />
+    <FloatingMusicPlayer />
     <slot />
 
     <!-- 播放器视图脚本：必须在 <slot /> 之后（解析到它时所有 widget 的 DOM 要已存在），
          且在 MusicManager 之后（swup 重跑按文档顺序，window.__fireflyMusic 得先就位） -->
-    {(musicPlayerConfig.showInNavbar || musicPlayerConfig.showInSidebar !== false) && (
+    {(musicPlayerConfig.showInNavbar || musicPlayerConfig.showInSidebar !== false || musicPlayerConfig.showFloatingPlayer) && (
       <MusicPlayerView />
     )}
 

@@ -1,7 +1,8 @@
 ---
 import type { MarkdownHeading } from "astro";
-import { siteConfig } from "@/config";
-import BackToComment from "./BackToComment.astro";
+import { musicPlayerConfig, siteConfig } from "@/config";
+import FloatingButton from "@/components/common/FloatingButton.astro";
+import AnnouncementDialog from "@/components/features/AnnouncementDialog.astro";
 import BackToHome from "./BackToHome.astro";
 import BackToTop from "./BackToTop.astro";
 import FloatingTOC from "./FloatingTOC.astro";
@@ -26,7 +27,10 @@ const immersiveReadingEnabled =
       <ImmersiveTOC headings={headings ?? []} encrypted={encrypted} />
     </>
   )}
-  <BackToComment />
+  <AnnouncementDialog />
+  {musicPlayerConfig.showFloatingPlayer && (
+    <FloatingButton id="music-floating-restore" icon="material-symbols:music-note-rounded" ariaLabel="显示悬浮音乐播放器" onclick="window.dispatchEvent(new CustomEvent('firefly:music-floating:restore'))" />
+  )}
   <BackToHome />
   <BackToTop />
 </div>

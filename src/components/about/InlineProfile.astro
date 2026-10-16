@@ -1,0 +1,126 @@
+---
+interface Props {
+	name: string;
+	avatar: string;
+	description: string;
+	bio?: string;
+}
+const { name, avatar, description, bio } = Astro.props;
+const id = `about-profile-${name.replace(/[^a-z0-9]/gi, "-")}`;
+---
+<span class="inline-profile">
+	<button type="button" class="profile-trigger" aria-describedby={id}>{name}<span aria-hidden="true">↗</span></button>
+	<span class="profile-popover" id={id} role="tooltip">
+		<span class="profile-heading"><img src={avatar} alt="" width="48" height="48" loading="lazy" /><strong>{name}</strong></span>
+		<span class="profile-description">{description}</span>
+		{bio && <span class="profile-bio">{bio}</span>}
+	</span>
+</span>
+<style>
+	.inline-profile {
+		position: relative;
+		display: inline;
+	}
+	.profile-trigger {
+		display: inline;
+		padding: 0.1em 0.2em;
+		border-radius: 0.35rem;
+		color: var(--primary);
+		font: inherit;
+		font-weight: 700;
+		cursor: pointer;
+		text-decoration: underline;
+		text-decoration-style: dotted;
+		text-underline-offset: 0.25em;
+	}
+	.profile-trigger > span {
+		margin-left: 0.2em;
+		font-size: 0.75em;
+	}
+	.profile-trigger:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 3px;
+	}
+	.profile-popover {
+		position: absolute;
+		z-index: 30;
+		top: calc(100% + 0.7rem);
+		left: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.65rem;
+		width: min(19rem, calc(100vw - 4rem));
+		padding: 1.2rem;
+		border: 1px solid var(--line-divider);
+		border-radius: 1rem;
+		background: var(--card-bg);
+		color: var(--btn-content);
+		box-shadow: 0 12px 40px #0002;
+		font-size: 0.875rem;
+		line-height: 1.6;
+		opacity: 0;
+		visibility: hidden;
+		transform: translateY(0.35rem);
+		transition:
+			opacity 150ms,
+			transform 150ms,
+			visibility 150ms;
+		pointer-events: none;
+	}
+	.profile-popover::before {
+		position: absolute;
+		top: -0.8rem;
+		left: 0;
+		right: 0;
+		height: 0.8rem;
+		content: "";
+	}
+	.inline-profile:hover .profile-popover,
+	.inline-profile:focus-within .profile-popover {
+		opacity: 1;
+		visibility: visible;
+		transform: translateY(0);
+		pointer-events: auto;
+	}
+	.profile-heading {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+	.profile-heading img {
+		margin: 0;
+		width: 3rem;
+		height: 3rem;
+		border-radius: 0.8rem;
+		object-fit: cover;
+	}
+	.profile-heading strong {
+		font-size: 1rem;
+	}
+	.profile-bio {
+		padding-top: 0.65rem;
+		border-top: 1px solid var(--line-divider);
+		color: var(--content-meta);
+		font-size: 0.75rem;
+		white-space: pre-line;
+	}
+	@media (max-width: 600px) {
+		.inline-profile {
+			position: static;
+		}
+		.profile-popover {
+			position: absolute;
+			top: auto;
+			bottom: auto;
+			left: 1.25rem;
+			right: 1.25rem;
+			width: auto;
+			margin-top: 1.75rem;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.profile-popover {
+			transition: none;
+		}
+	}
+</style>

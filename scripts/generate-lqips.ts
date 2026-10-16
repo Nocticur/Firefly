@@ -14,6 +14,8 @@ const IGNORE_DIRS = [
 	"public/pio/**",
 	"public/assets/images/effects/**",
 	"public/assets/music/**",
+	// Site snapshots are loaded by the friend preview dialog and updated independently.
+	"public/assets/friends/**",
 	"public/vndb-covers/**",
 ];
 

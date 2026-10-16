@@ -11,7 +11,7 @@ export const dynamicConfig: DynamicConfig = {
 	profileUrl: "/about/",
 
 	// 是否为每条动态启用评论，需要先在 commentConfig.ts 启用评论系统
-	showComment: true,
+	showComment: false,
 
 	// 每页显示的动态数量
 	itemsPerPage: 20,

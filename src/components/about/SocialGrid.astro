@@ -1,0 +1,90 @@
+---
+import { Icon } from "astro-icon/components";
+import type { AboutSocial } from "@/data/about";
+
+interface Props {
+	items: AboutSocial[];
+}
+const { items } = Astro.props;
+---
+<div class="about-socials not-prose">
+	{items.map((item) => (
+		<a class="no-styling" href={item.url} target={item.url.startsWith("mailto:") ? undefined : "_blank"} rel="noopener noreferrer" style={`--brand: ${item.color}`}>
+			<span class="social-icon"><Icon name={item.icon} /></span><span class="social-label"><strong>{item.name}</strong><span>{item.handle}</span></span><span class="social-arrow" aria-hidden="true">↗</span>
+		</a>
+	))}
+</div>
+<style>
+	.about-socials {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.8rem;
+		margin: 1.5rem 0 2rem;
+	}
+	.about-socials a {
+		display: flex;
+		align-items: center;
+		gap: 0.875rem;
+		min-width: 0;
+		min-height: 5rem;
+		padding: 1rem;
+		border: 1px solid var(--line-divider);
+		border-radius: 0.9rem;
+		background: color-mix(in srgb, var(--brand) 4%, transparent);
+		color: var(--btn-content);
+		text-decoration: none;
+		transition:
+			border-color 180ms,
+			transform 180ms;
+	}
+	.about-socials a:hover {
+		border-color: var(--brand);
+		transform: translateY(-2px);
+	}
+	.about-socials a:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 3px;
+	}
+	.social-icon {
+		display: grid;
+		place-items: center;
+		flex-shrink: 0;
+		width: 2.5rem;
+		height: 2.5rem;
+		border-radius: 0.7rem;
+		background: color-mix(in srgb, var(--brand) 12%, transparent);
+		color: var(--brand);
+	}
+	.social-icon :global(svg) {
+		width: 1.4rem;
+		height: 1.4rem;
+	}
+	.social-label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		min-width: 0;
+	}
+	.social-label strong {
+		font-size: 0.95rem;
+	}
+	.social-label > span {
+		color: var(--content-meta);
+		font-size: 0.75rem;
+		overflow-wrap: anywhere;
+	}
+	.social-arrow {
+		margin-left: auto;
+		color: var(--content-meta);
+	}
+	@media (max-width: 600px) {
+		.about-socials {
+			grid-template-columns: 1fr;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.about-socials a {
+			transition: none;
+		}
+	}
+</style>

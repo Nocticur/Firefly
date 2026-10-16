@@ -1,0 +1,112 @@
+---
+import { Icon } from "astro-icon/components";
+import type { SiteTechnology } from "@/data/about";
+
+interface Props {
+	items: SiteTechnology[];
+}
+const { items } = Astro.props;
+---
+<div class="site-stack not-prose">
+	{items.map((item) => (
+		<details class="stack-item" style={`--brand: ${item.color}`}>
+			<summary><span class="stack-icon"><Icon name={item.icon} /></span><span>{item.name}</span><span class="stack-toggle" aria-hidden="true">+</span></summary>
+			<div class="stack-expander"><div class="stack-content"><p>{item.description}</p><a class="no-styling" href={item.url} target="_blank" rel="noopener noreferrer">访问官网<span aria-hidden="true"> ↗</span></a></div></div>
+		</details>
+	))}
+</div>
+<style>
+	.site-stack {
+		display: grid;
+		gap: 0.6rem;
+		margin: 1.25rem 0 2rem;
+	}
+	.stack-item {
+		border: 1px solid var(--line-divider);
+		border-radius: 0.9rem;
+		background: color-mix(in srgb, var(--brand) 4%, transparent);
+	}
+	.stack-item summary {
+		display: flex;
+		align-items: center;
+		gap: 0.8rem;
+		min-height: 3.5rem;
+		padding: 0.7rem 1rem;
+		color: var(--btn-content);
+		font-weight: 600;
+		cursor: pointer;
+		list-style: none;
+	}
+	.stack-item summary::-webkit-details-marker {
+		display: none;
+	}
+	.stack-item summary:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 3px;
+		border-radius: 0.9rem;
+	}
+	.stack-icon {
+		display: grid;
+		place-items: center;
+		width: 2.25rem;
+		height: 2.25rem;
+		border-radius: 0.6rem;
+		background: color-mix(in srgb, var(--brand) 12%, transparent);
+		color: var(--brand);
+	}
+	.stack-icon :global(svg) {
+		width: 1.35rem;
+		height: 1.35rem;
+	}
+	.stack-toggle {
+		margin-left: auto;
+		color: var(--content-meta);
+		font-size: 1.4rem;
+		transition: transform 180ms;
+	}
+	.stack-item[open] .stack-toggle {
+		transform: rotate(45deg);
+	}
+	.stack-expander {
+		display: grid;
+		grid-template-rows: 1fr;
+	}
+	.stack-content {
+		overflow: hidden;
+		min-height: 0;
+		padding: 0 1rem 1rem 4.05rem;
+		color: var(--content-meta);
+		font-size: 0.875rem;
+		line-height: 1.8;
+	}
+	.stack-content a {
+		display: inline-block;
+		margin-top: 0.5rem;
+		color: var(--btn-content);
+		text-decoration: underline;
+		text-underline-offset: 0.2em;
+	}
+	@supports (transition-behavior: allow-discrete) {
+		.stack-item::details-content {
+			display: grid;
+			grid-template-rows: 0fr;
+			content-visibility: hidden;
+			transition:
+				grid-template-rows 220ms,
+				content-visibility 220ms allow-discrete;
+		}
+		.stack-item[open]::details-content {
+			grid-template-rows: 1fr;
+			content-visibility: visible;
+		}
+		.stack-expander {
+			overflow: hidden;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.stack-item::details-content,
+		.stack-toggle {
+			transition: none;
+		}
+	}
+</style>

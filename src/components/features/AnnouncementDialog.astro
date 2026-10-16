@@ -1,0 +1,77 @@
+---
+import { Icon } from "astro-icon/components";
+import FloatingButton from "@/components/common/FloatingButton.astro";
+import { announcementConfig } from "@/config/announcementConfig";
+import type { AnnouncementConfig } from "@/types/announcementConfig";
+import { url } from "@/utils/url-utils";
+
+const config = announcementConfig;
+const fallback: NonNullable<AnnouncementConfig["items"]> = [{ id: "announcement", title: config.title || "公告", content: config.content, ...(config.link?.enable !== false && config.link ? { link: config.link } : {}) }];
+const items = (config.items ?? fallback)
+	.filter((item) => item.enabled !== false && item.content.trim());
+const enabled = config.enable !== false && items.length > 0;
+const safeHref = (href: string) => /^https?:\/\//i.test(href) ? href : href.startsWith("/") && !href.startsWith("//") ? url(href) : undefined;
+---
+
+{enabled && (
+	<announcement-dialog>
+		<FloatingButton id="announcement-dialog-trigger" icon="material-symbols:campaign-rounded" ariaLabel="查看站点公告" onclick="this.closest('announcement-dialog').querySelector('dialog').showModal()" />
+		<dialog id="announcement-details" aria-labelledby="announcement-dialog-title" class="announcement-dialog">
+			<div class="announcement-dialog__heading">
+				<h2 id="announcement-dialog-title">{config.title || "站点公告"}</h2>
+				<form method="dialog"><button type="submit" aria-label="关闭公告" class="announcement-dialog__close"><Icon name="material-symbols:close-rounded" /></button></form>
+			</div>
+			<div class="announcement-dialog__items">
+				{items.map((item) => (
+					<article>
+						<div class="announcement-dialog__meta">
+							{item.label && <span>{item.label}</span>}
+							{item.date && <time datetime={item.date}>{item.date}</time>}
+						</div>
+						<h3>{item.title}</h3>
+						<p>{item.content}</p>
+						{item.link && safeHref(item.link.url) && <a href={safeHref(item.link.url)} target={item.link.external ? "_blank" : undefined} rel={item.link.external ? "noopener noreferrer" : undefined}>{item.link.text}<span aria-hidden="true"> →</span></a>}
+					</article>
+				))}
+			</div>
+		</dialog>
+	</announcement-dialog>
+)}
+
+<script>
+	class AnnouncementDialog extends HTMLElement {
+		connectedCallback() {
+			if (this.dataset.ready) return;
+			this.dataset.ready = "true";
+			const dialog = this.querySelector("dialog");
+			const trigger = this.querySelector(".floating-btn button");
+			trigger?.setAttribute("aria-haspopup", "dialog");
+			trigger?.setAttribute("aria-controls", "announcement-details");
+			dialog?.addEventListener("click", (event) => {
+				if (event.target !== dialog) return;
+				const rect = dialog.getBoundingClientRect();
+				if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close();
+			});
+			// Closing before navigation also releases the modal's focus and inert state.
+			dialog?.querySelectorAll("a").forEach((link) => link.addEventListener("click", () => dialog.close()));
+		}
+	}
+	if (!customElements.get("announcement-dialog")) customElements.define("announcement-dialog", AnnouncementDialog);
+</script>
+
+<style>
+	announcement-dialog { display: contents; }
+	.announcement-dialog { pointer-events: auto; width: min(38rem, calc(100vw - 2rem)); max-height: min(80dvh, 48rem); margin: auto; padding: 1.5rem; border: 1px solid var(--line-divider); border-radius: var(--radius-large); color: var(--btn-content); background: var(--card-bg); box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 0.2); }
+	.announcement-dialog::backdrop { background: rgb(0 0 0 / 0.45); backdrop-filter: blur(4px); }
+	.announcement-dialog__heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+	h2 { font-size: 1.25rem; font-weight: 700; }
+	.announcement-dialog__close { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border-radius: 50%; cursor: pointer; background: var(--btn-regular-bg); color: var(--primary); }
+	.announcement-dialog__items { display: grid; gap: 1.5rem; margin-top: 1rem; }
+	article + article { border-top: 1px solid var(--line-divider); padding-top: 1.5rem; }
+	.announcement-dialog__meta { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; font-size: 0.75rem; color: var(--content-meta); }
+	.announcement-dialog__meta span { background: var(--btn-regular-bg); color: var(--primary); border-radius: 0.4rem; padding: 0.2rem 0.5rem; }
+	h3 { font-size: 1.1rem; font-weight: 600; margin-block: 0.75rem; }
+	p { white-space: pre-line; line-height: 1.75; }
+	a { display: inline-block; color: var(--primary); margin-top: 0.75rem; text-decoration: underline; text-underline-offset: 0.2em; }
+	button:focus-visible, a:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+</style>

@@ -1,6 +1,5 @@
 ---
 import { render } from "astro:content";
-import Comment from "@components/comment/index.astro";
 import Markdown from "@components/common/Markdown.astro";
 import EncryptedPost from "@components/features/EncryptedPost.astro";
 import KatexManager from "@components/features/KatexManager.astro";
@@ -32,6 +31,7 @@ import { profileConfig } from "@/config/profileConfig";
 import { siteConfig } from "@/config/siteConfig";
 import { sponsorConfig } from "@/config/sponsorConfig";
 import { formatDateToYYYYMMDD } from "@/utils/date-utils";
+import { isPageAvailable } from "@/utils/page-availability";
 import { getApiUrlList, processCoverImageSync } from "@/utils/image-utils";
 import {
 	getAuthorAvatarUrl,
@@ -47,7 +47,7 @@ import {
 import { url } from "@/utils/url-utils";
 
 const showSponsorButton =
-	sponsorConfig.showButtonInPost && siteConfig.pages.sponsor;
+	sponsorConfig.showButtonInPost && isPageAvailable("sponsor", siteConfig.pages, sponsorConfig.enable);
 const showPostActionCard = siteConfig.post.share || showSponsorButton;
 
 export async function getStaticPaths() {
@@ -429,8 +429,7 @@ const relatedPosts = await getRelatedPosts(entry, 5);
                     <div class="flex items-center gap-3 flex-1">
                       <div class="h-12 w-12 rounded-lg bg-(--primary) flex items-center justify-center text-white dark:text-black/70 shrink-0">
                         <Icon
-                          name={sponsorConfig.showButtonInPost &&
-                          siteConfig.pages.sponsor
+                          name={showSponsorButton
                             ? "material-symbols:favorite"
                             : "material-symbols:share"}
                           class="text-2xl"
@@ -439,14 +438,14 @@ const relatedPosts = await getRelatedPosts(entry, 5);
                       <div>
                         <h3 class="text-lg font-semibold text-neutral-900 dark:text-neutral-100 mb-1">
                           {
-                            sponsorConfig.showButtonInPost && siteConfig.pages.sponsor
+                            showSponsorButton
                               ? i18n(I18nKey.sponsorButton)
                               : i18n(I18nKey.shareOnSocial)
                           }
                         </h3>
                         <p class="text-sm text-neutral-600 dark:text-neutral-400">
                           {
-                            sponsorConfig.showButtonInPost && siteConfig.pages.sponsor
+                            showSponsorButton
                               ? i18n(I18nKey.sponsorButtonText)
                               : i18n(I18nKey.shareOnSocialDescription)
                           }
@@ -519,8 +518,7 @@ const relatedPosts = await getRelatedPosts(entry, 5);
                     <div class="flex items-center gap-3 flex-1">
                       <div class="h-12 w-12 rounded-lg bg-(--primary) flex items-center justify-center text-white dark:text-black/70 shrink-0">
                         <Icon
-                          name={sponsorConfig.showButtonInPost &&
-                          siteConfig.pages.sponsor
+                          name={showSponsorButton
                             ? "material-symbols:favorite"
                             : "material-symbols:share"}
                           class="text-2xl"
@@ -529,14 +527,14 @@ const relatedPosts = await getRelatedPosts(entry, 5);
                       <div>
                         <h3 class="text-lg font-semibold text-neutral-900 dark:text-neutral-100 mb-1">
                           {
-                            sponsorConfig.showButtonInPost && siteConfig.pages.sponsor
+                            showSponsorButton
                               ? i18n(I18nKey.sponsorButton)
                               : i18n(I18nKey.shareOnSocial)
                           }
                         </h3>
                         <p class="text-sm text-neutral-600 dark:text-neutral-400">
                           {
-                            sponsorConfig.showButtonInPost && siteConfig.pages.sponsor
+                            showSponsorButton
                               ? i18n(I18nKey.sponsorButtonText)
                               : i18n(I18nKey.shareOnSocialDescription)
                           }
@@ -717,5 +715,4 @@ const relatedPosts = await getRelatedPosts(entry, 5);
   }
 
   <!-- 评论 -->
-  {entry.data.comment && !entry.data.password && <Comment post={entry} />}
 </MainGridLayout>

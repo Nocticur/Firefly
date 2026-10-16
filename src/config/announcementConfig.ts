@@ -1,11 +1,22 @@
 import type { AnnouncementConfig } from "../types/announcementConfig";
 
 export const announcementConfig: AnnouncementConfig = {
+	enable: true,
+	// An empty array removes the announcement details entry and dialog.
+	items: [
+		{
+			id: "welcome",
+			title: "欢迎来到我的博客",
+			label: "站点公告",
+			content: "这里记录个人学习、工作与 AI 相关的内容。欢迎随时回来看看。",
+			link: { text: "了解博主", url: "/about/" },
+		},
+	],
 	// 公告标题，留空则走i18n默认标题
 	title: "",
 
 	// 公告内容
-	content: "欢迎来到我的博客！这是一则示例公告。",
+	content: "这里记录个人学习、工作与 AI 相关的内容。欢迎随时回来看看。",
 
 	// 是否允许用户关闭公告
 	closable: true,

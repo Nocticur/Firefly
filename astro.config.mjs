@@ -35,6 +35,7 @@ import {
 	mermaidConfig,
 	plantumlConfig,
 	siteConfig,
+	sponsorConfig,
 } from "./src/config";
 import I18nKey from "./src/i18n/i18nKey";
 import { i18n } from "./src/i18n/translation";
@@ -54,6 +55,7 @@ import { remarkPlantuml } from "./src/plugins/remark-plantuml.js";
 import { remarkReadingTime } from "./src/plugins/remark-reading-time.mjs";
 import { remarkWikiLink } from "./src/plugins/remark-wiki-link.js";
 import { collectUsedFontCssVars } from "./src/utils/fontHelper";
+import { isRouteAvailable } from "./src/utils/page-availability";
 
 if (process.env.NODE_ENV === "development") {
 	setMaxListeners(20);
@@ -239,28 +241,7 @@ export default defineConfig({
 				// 根据页面开关配置过滤sitemap
 				const url = new URL(page);
 				const pathname = url.pathname;
-				if (pathname === "/dynamic/" && !siteConfig.pages.dynamic) {
-					return false;
-				}
-				if (pathname.startsWith("/gallery/") && !siteConfig.pages.gallery) {
-					return false;
-				}
-				if (pathname === "/friends/" && !siteConfig.pages.friends) {
-					return false;
-				}
-				if (pathname === "/booknav/" && !siteConfig.pages.booknav) {
-					return false;
-				}
-				if (pathname === "/bilibili/" && !siteConfig.pages.bilibili) {
-					return false;
-				}
-				if (pathname === "/bangumi/" && !siteConfig.pages.bangumi) {
-					return false;
-				}
-				if (pathname === "/vndb/" && !siteConfig.pages.vndb) {
-					return false;
-				}
-				if (pathname === "/myanimelist/" && !siteConfig.pages.mal) {
+				if (!isRouteAvailable(pathname, siteConfig.pages, sponsorConfig.enable)) {
 					return false;
 				}
 				// 动态页评论嵌入页：评论关闭时重定向到 /404/，不应进 sitemap
@@ -270,9 +251,6 @@ export default defineConfig({
 						!commentConfig.type ||
 						commentConfig.type === "none")
 				) {
-					return false;
-				}
-				if (pathname === "/sponsor/" && !siteConfig.pages.sponsor) {
 					return false;
 				}
 				return true;

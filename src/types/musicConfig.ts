@@ -17,6 +17,8 @@ export type MusicPlayerConfig = {
 
 	// 是否在侧边栏显示音乐播放器组件
 	showInSidebar?: boolean;
+	// Shows a dismissible player after playback begins; dismissal survives navigation.
+	showFloatingPlayer?: boolean;
 
 	// Meting API 配置
 	meting?: {

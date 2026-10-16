@@ -1,7 +1,207 @@
-/* 打赏页专属：打赏方式网格 */
-
+.sponsor-page {
+	padding: clamp(1.25rem, 3vw, 2.25rem);
+}
+.sponsor-page h1 {
+	color: var(--deep-text);
+	font-size: 1.5rem;
+	font-weight: 700;
+}
+:root.dark .sponsor-page h1 {
+	color: var(--btn-content);
+}
+.sponsor-usage {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.65rem;
+	margin: 1.5rem 0;
+	padding: 1rem;
+	border-radius: 0.875rem;
+	background: color-mix(in srgb, var(--primary) 10%, transparent);
+	color: var(--btn-content);
+	line-height: 1.7;
+}
+.sponsor-usage svg {
+	flex: 0 0 auto;
+	width: 1.25rem;
+	height: 1.25rem;
+	margin-top: 0.2rem;
+	color: var(--primary);
+}
+.sponsor-methods {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+	gap: 1rem;
+	margin-top: 1.75rem;
+}
+.sponsor-method {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 1rem;
+	padding: 1.5rem;
+	border: 1px solid var(--line-divider);
+	border-radius: 1rem;
+	color: var(--btn-content);
+	text-align: center;
+	transition: border-color 180ms;
+}
+.sponsor-method:hover {
+	border-color: var(--primary);
+}
+.sponsor-method-heading {
+	display: flex;
+	align-items: center;
+	gap: 0.65rem;
+}
+.sponsor-method-heading svg {
+	width: 1.6rem;
+	height: 1.6rem;
+	color: var(--primary);
+}
+.sponsor-method-heading h2 {
+	font-size: 1.125rem;
+	font-weight: 700;
+}
+.sponsor-method > p {
+	color: var(--content-meta);
+	font-size: 0.875rem;
+}
+.sponsor-qr {
+	width: min(100%, 232px);
+	padding: 1rem;
+	border-radius: 0.875rem;
+	background: #fff;
+	color: #555;
+}
+.sponsor-qr img {
+	display: block;
+	width: 100%;
+	height: auto;
+	aspect-ratio: 1;
+	object-fit: contain;
+}
+.sponsor-qr-image {
+	width: 100%;
+	aspect-ratio: 1;
+}
+.sponsor-qr figcaption {
+	margin-top: 0.75rem;
+	font-size: 0.75rem;
+}
+.sponsor-link {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.5rem;
+	margin: auto 0;
+	min-height: 2.75rem;
+	padding: 0.65rem 1rem;
+	border-radius: 0.65rem;
+	background: var(--btn-regular-bg);
+	color: var(--btn-content);
+	font-weight: 600;
+}
+.sponsor-link:hover {
+	background: var(--btn-regular-bg-hover);
+}
+.sponsor-link:focus-visible {
+	outline: 2px solid var(--primary);
+	outline-offset: 4px;
+}
+.sponsor-link svg {
+	width: 1rem;
+	height: 1rem;
+}
+.sponsor-list-section {
+	margin-top: 1rem;
+}
+.sponsor-list-heading {
+	display: flex;
+	justify-content: space-between;
+	gap: 1rem;
+	margin-bottom: 1.25rem;
+	color: var(--btn-content);
+}
+.sponsor-list-heading h2 {
+	font-size: 1.25rem;
+	font-weight: 700;
+}
+.sponsor-list-heading > span {
+	color: var(--content-meta);
+	font-size: 0.8rem;
+}
 .sponsor-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+	grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
 	gap: 0.75rem;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.sponsor-person {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	min-width: 0;
+	padding: 0.875rem;
+	border: 1px solid var(--line-divider);
+	border-radius: 0.875rem;
+}
+.sponsor-avatar {
+	position: relative;
+	display: grid;
+	place-items: center;
+	flex-shrink: 0;
+	width: 2.5rem;
+	height: 2.5rem;
+	overflow: hidden;
+	border-radius: 50%;
+	background: color-mix(in srgb, var(--primary) 12%, transparent);
+	color: var(--primary);
+	font-weight: 700;
+}
+.sponsor-avatar img {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+.sponsor-person-info {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-width: 0;
+	gap: 0.2rem;
+}
+.sponsor-name {
+	overflow: hidden;
+	color: var(--btn-content);
+	font-size: 0.875rem;
+	font-weight: 600;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sponsor-person time {
+	color: var(--content-meta);
+	font-size: 0.75rem;
+}
+.sponsor-amount {
+	flex-shrink: 0;
+	color: var(--primary);
+	font-size: 0.875rem;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+.sponsor-empty {
+	margin: 1rem 0;
+	padding: 2rem 0;
+	color: var(--content-meta);
+	text-align: center;
+	line-height: 1.7;
+}
+@media (prefers-reduced-motion: reduce) {
+	.sponsor-method {
+		transition: none;
+	}
 }

@@ -34,6 +34,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm type-check
+      - run: pnpm test:site
       - run: pnpm --filter @nocticur/admin type-check
       - run: pnpm --filter @nocticur/admin test
       - run: pnpm --filter @nocticur/admin exec tsx --test ../../scripts/generate-release-manifest.test.ts

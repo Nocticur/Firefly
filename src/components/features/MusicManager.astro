@@ -350,6 +350,17 @@ const managerConfigStr = JSON.stringify({
     }
 
     // ── Audio events → broadcast ─────────────────────────────
+	// UI and floating lyrics follow the media element, including OS/browser pauses
+	// and buffering, rather than only the result of our own play buttons.
+	function syncActualPlayback(playing) {
+		if (state.isPlaying === playing) return;
+		state.isPlaying = playing;
+		emit('fm:play-state', { isPlaying: playing });
+	}
+	audio.addEventListener('playing', function () { syncActualPlayback(true); });
+	['pause', 'waiting', 'ended', 'error', 'emptied'].forEach(function (event) {
+		audio.addEventListener(event, function () { syncActualPlayback(false); });
+	});
     audio.addEventListener('timeupdate', function () {
         if (isNaN(audio.duration)) return;
         var ct = audio.currentTime;

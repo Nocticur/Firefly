@@ -475,7 +475,7 @@ const viewConfigStr = JSON.stringify({
                     var lineOffset = line.offsetTop;
                     var lineHeight = line.offsetHeight;
                     var targetScroll = lineOffset - (containerHeight / 2) + (lineHeight / 2);
-                    ui.lrcContainer.scrollTo({ top: targetScroll, behavior: 'smooth' });
+                    ui.lrcContainer.scrollTo({ top: targetScroll, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
                 }
             }
         }
@@ -772,4 +772,7 @@ const viewConfigStr = JSON.stringify({
         0%, 100% { height: 4px; }
         50%      { height: 14px; }
     }
+	@media (prefers-reduced-motion: reduce) {
+		.eq-bars .eq-bar { animation: none !important; height: 8px; }
+	}
 </style>
