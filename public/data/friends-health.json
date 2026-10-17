@@ -1,43 +1,43 @@
 {
   "schemaVersion": 1,
-  "checkedAt": "2026-10-16T19:55:57.620Z",
+  "checkedAt": "2026-10-17T09:16:20.069Z",
   "results": [
     {
-      "url": "https://blog.cuteleaf.cn",
+      "url": "https://blog.cuteleaf.cn/",
       "name": "夏夜流萤",
       "status": "success",
-      "latencyMs": 1563,
+      "latencyMs": 1709,
       "statusCode": 200,
       "consecutiveFailures": 0,
       "backlink": "unchecked",
-      "checkedAt": "2026-10-16T19:55:57.619Z",
+      "checkedAt": "2026-10-17T09:16:20.068Z",
+      "lastSuccessAt": "2026-10-17T09:16:20.068Z",
       "screenshot": "/assets/friends/f006b20de01683841d4b534b.webp",
-      "screenshotAt": "2026-10-16T05:14:47.263Z",
-      "lastSuccessAt": "2026-10-16T19:55:57.619Z"
+      "screenshotAt": "2026-10-16T05:14:47.263Z"
     },
     {
-      "url": "https://docs-firefly.cuteleaf.cn",
+      "url": "https://docs-firefly.cuteleaf.cn/",
       "name": "Firefly Docs",
       "status": "success",
-      "latencyMs": 907,
+      "latencyMs": 1236,
       "statusCode": 200,
       "consecutiveFailures": 0,
       "backlink": "unchecked",
-      "checkedAt": "2026-10-16T19:55:56.861Z",
+      "checkedAt": "2026-10-17T09:16:19.531Z",
+      "lastSuccessAt": "2026-10-17T09:16:19.531Z",
       "screenshot": "/assets/friends/75bbabe244524a098e02a5b8.webp",
-      "screenshotAt": "2026-10-16T05:08:47.696Z",
-      "lastSuccessAt": "2026-10-16T19:55:56.861Z"
+      "screenshotAt": "2026-10-16T05:08:47.696Z"
     },
     {
       "url": "https://github.com/withastro/astro",
       "name": "Astro",
       "status": "success",
-      "latencyMs": 751,
+      "latencyMs": 1266,
       "statusCode": 200,
       "consecutiveFailures": 0,
       "backlink": "unchecked",
-      "checkedAt": "2026-10-16T19:55:56.829Z",
-      "lastSuccessAt": "2026-10-16T19:55:56.829Z",
+      "checkedAt": "2026-10-17T09:16:19.631Z",
+      "lastSuccessAt": "2026-10-17T09:16:19.631Z",
       "screenshot": "/assets/friends/641875415b61f75444d31fee.webp",
       "screenshotAt": "2026-10-16T19:56:21.256Z"
     }
