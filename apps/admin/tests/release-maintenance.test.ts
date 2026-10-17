@@ -10,6 +10,7 @@ import {
 import { ApiFailure } from "../server/security.js";
 import {
 	claimMaintenanceTask,
+	cleanupExpiredData,
 	createBackup,
 	processMaintenanceTask,
 	restoreBackup,
@@ -19,6 +20,7 @@ const site = "Nocticur/Firefly:production";
 class MemoryBlob implements BackupBlobProvider {
 	objects = new Map<string, Buffer>();
 	puts: string[] = [];
+	deletes: string[] = [];
 	onPut?: () => Promise<void>;
 	async put(path: string, bytes: Buffer) {
 		this.puts.push(path);
@@ -28,6 +30,10 @@ class MemoryBlob implements BackupBlobProvider {
 	}
 	async get(path: string) {
 		return this.objects.get(path) || null;
+	}
+	async delete(path: string) {
+		this.deletes.push(path);
+		this.objects.delete(path);
 	}
 }
 function deferred() {
@@ -398,4 +404,55 @@ test("daily maintenance completes verified release business when new publishing 
 	assert.deepEqual(result, { done: true, state: "verified" });
 	assert.equal(reconciled, 1);
 	assert.equal(published, 0);
+});
+
+test("cleanup removes data older than 30 days but keeps active and baseline release records", async () => {
+	const store = createMemoryStore(site),
+		blob = new MemoryBlob(),
+		now = Date.parse("2026-10-17T00:00:00.000Z"),
+		old = new Date(now - 31 * 24 * 60 * 60 * 1000).toISOString(),
+		boundary = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString(),
+		recent = new Date(now - 29 * 24 * 60 * 60 * 1000).toISOString();
+	await store.update((state) => {
+		const entities = collection(state, "entities"),
+			tasks = collection(state, "release_tasks"),
+			snapshots = collection(state, "release_snapshots"),
+			backups = collection(state, "maintenance_backups");
+		entities["repository:baseline"] = { id: "baseline", kind: "repository", data: { taskId: "baseline-task", snapshotId: "baseline-snapshot" }, created_at: old };
+		entities["post-version-old"] = { id: "post-version-old", kind: "post_version", data: {}, created_at: old };
+		entities["post-version-boundary"] = { id: "post-version-boundary", kind: "post_version", data: {}, created_at: boundary };
+		entities["post-version-recent"] = { id: "post-version-recent", kind: "post_version", data: {}, created_at: recent };
+		tasks["old-task"] = { id: "old-task", kind: "publish", state: "verified", snapshot_id: "old-snapshot", details: {}, created_at: old, updated_at: old };
+		tasks["baseline-task"] = { id: "baseline-task", kind: "publish", state: "verified", snapshot_id: "baseline-snapshot", details: {}, created_at: old, updated_at: old };
+		tasks["active-task"] = { id: "active-task", kind: "publish", state: "unknown", snapshot_id: "active-snapshot", details: {}, created_at: old, updated_at: old };
+		tasks["recent-task"] = { id: "recent-task", kind: "publish", state: "verified", snapshot_id: "recent-snapshot", details: {}, created_at: recent, updated_at: recent };
+		snapshots["old-snapshot"] = { id: "old-snapshot", created_at: old, data: {} };
+		snapshots["baseline-snapshot"] = { id: "baseline-snapshot", created_at: old, data: {} };
+		snapshots["active-snapshot"] = { id: "active-snapshot", created_at: old, data: {} };
+		snapshots["recent-snapshot"] = { id: "recent-snapshot", created_at: recent, data: {} };
+		backups.old = { id: "old", state: "verified", pathname: "backups/old.json", created_at: old };
+		backups.recent = { id: "recent", state: "verified", pathname: "backups/recent.json", created_at: recent };
+	});
+	blob.objects.set("backups/old.json", Buffer.from("old"));
+	blob.objects.set("backups/recent.json", Buffer.from("recent"));
+
+	const result = await cleanupExpiredData(store, site, blob, now);
+	const state = await store.read();
+	assert.equal(result.postVersions, 2);
+	assert.equal(result.releaseTasks, 1);
+	assert.equal(result.releaseSnapshots, 1);
+	assert.equal(result.backups, 1);
+	assert.equal(collection(state, "entities")["post-version-old"], undefined);
+	assert.equal(collection(state, "entities")["post-version-boundary"], undefined);
+	assert.ok(collection(state, "entities")["post-version-recent"]);
+	assert.equal(collection(state, "release_tasks")["old-task"], undefined);
+	assert.ok(collection(state, "release_tasks")["baseline-task"]);
+	assert.ok(collection(state, "release_tasks")["active-task"]);
+	assert.ok(collection(state, "release_tasks")["recent-task"]);
+	assert.equal(collection(state, "release_snapshots")["old-snapshot"], undefined);
+	assert.ok(collection(state, "release_snapshots")["baseline-snapshot"]);
+	assert.ok(collection(state, "release_snapshots")["active-snapshot"]);
+	assert.equal(collection(state, "maintenance_backups").old, undefined);
+	assert.ok(collection(state, "maintenance_backups").recent);
+	assert.deepEqual(blob.deletes, ["backups/old.json"]);
 });

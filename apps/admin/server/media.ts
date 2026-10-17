@@ -11,6 +11,7 @@ export { blobToken } from "./storage-config.js";
 import { ApiFailure, readJson } from "./security.js";
 import type { AdminApp } from "./types.js";
 import { defaultMediaImportHosts } from "./runtime-config.js";
+import { uploadToImageBed } from "./image-host.js";
 
 export const MAX_MEDIA_SIZE = 32 * 1024 * 1024;
 const EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/avif": "avif", "image/svg+xml": "svg", "image/x-icon": "ico", "image/vnd.microsoft.icon": "ico" };
@@ -110,43 +111,58 @@ export async function importBytes(raw: string, options: ImportOptions = {}): Pro
 	}
 }
 
-export type FrozenMedia = Record<string, unknown> & { id: string; pathname: string; digest: string; size: number; contentType: string; revision: number };
-export type MediaPublicationOptions = { store?: FileStore; site?: string; frozenMedia?: Record<string, FrozenMedia>; blob?: { get: typeof get; head: typeof head; put: typeof put } };
+export type FrozenMedia = Record<string, unknown> & { id: string; pathname: string; digest: string; size: number; contentType: string; revision: number; publishedUrl?: string };
+export type MediaPublicationOptions = {
+	store?: FileStore;
+	site?: string;
+	frozenMedia?: Record<string, FrozenMedia>;
+	blob?: { get: typeof get; head: typeof head; put: typeof put };
+	imageBed?: (bytes: Uint8Array, filename: string, contentType: string) => Promise<string>;
+};
 
 export async function publishMediaForSnapshot(ids: string[], _taskId: string, options: MediaPublicationOptions = {}): Promise<Record<string, string>> {
 	if (ids.length && !options.frozenMedia) throw new ApiFailure(409, "FROZEN_MEDIA_INVALID", "发布必须使用已冻结的媒体清单");
 	const store = options.store || getStore(); const site = options.site || getSiteId();
 	const storage = options.blob || { get, head, put };
-	const token = blobToken("public"); const privateToken = blobToken("private"); const urls: Record<string, string> = {};
+	const privateToken = blobToken("private");
+	const legacyPublicToken = options.blob ? blobToken("public") : undefined;
+	const urls: Record<string, string> = {};
 	for (const id of [...new Set(ids)]) {
-		let media = options.frozenMedia?.[id];
+		const media = options.frozenMedia?.[id];
 		if (!media || media.id !== id || typeof media.pathname !== "string" || !media.pathname || !Object.hasOwn(EXTENSIONS, media.contentType) || !/^[a-f0-9]{64}$/.test(media.digest) || !Number.isSafeInteger(media.size) || media.size < 1 || media.size > MAX_MEDIA_SIZE || !Number.isSafeInteger(media.revision) || media.revision < 1) throw new ApiFailure(409, "FROZEN_MEDIA_INVALID", "冻结媒体记录不完整");
-		// Read the frozen immutable pathname even if the current draft was edited or deleted.
 		const source = await storage.get(media.pathname, { access: "private", token: privateToken, useCache: false });
 		if (!source || source.statusCode !== 200) throw new ApiFailure(409, "MEDIA_MISSING", "待发布媒体不可读取");
 		const bytes = await readStream(source.stream, media.size); const digest = createHash("sha256").update(bytes).digest("hex");
 		const detected = safeMediaType(bytes);
 		if (digest !== media.digest || bytes.length !== media.size || (detected !== media.contentType && !(detected === "image/x-icon" && media.contentType === "image/vnd.microsoft.icon"))) throw new ApiFailure(409, "MEDIA_CHANGED", "媒体内容与冻结记录不一致");
-		const pathname = `published/${createHash("sha256").update(site).digest("hex").slice(0,16)}/${id}/${digest}.${EXTENSIONS[media.contentType]}`;
-		const existing = async (): Promise<string | undefined> => {
-			let metadata: Awaited<ReturnType<typeof head>>;
-			try { metadata = await storage.head(pathname, { token }); } catch (error) { if ((error as Error).constructor.name === "BlobNotFoundError") return; throw error; }
-			const result = await storage.get(pathname, { token, access: "public", useCache: false });
-			if (!result || result.statusCode !== 200 || metadata.size !== media!.size || metadata.contentType !== media!.contentType) throw new ApiFailure(409, "PUBLISHED_MEDIA_CONFLICT", "已发布媒体校验不一致");
-			const published = await readStream(result.stream, media!.size);
-			if (published.length !== media!.size || createHash("sha256").update(published).digest("hex") !== digest) throw new ApiFailure(409, "PUBLISHED_MEDIA_CONFLICT", "已发布媒体校验不一致");
-			return metadata.url;
-		};
-		let url = await existing();
-		if (!url) {
-			try { await storage.put(pathname, bytes, { access: "public", token, addRandomSuffix: false, allowOverwrite: false, contentType: media.contentType, cacheControlMaxAge: 31536000 }); }
-			catch (error) { if (!(url = await existing())) throw error; }
-			url ||= await existing();
-			if (!url) throw new ApiFailure(409, "PUBLISHED_MEDIA_UNVERIFIED", "公开媒体尚未通过读取核验");
+
+		let url: string | undefined;
+		if (!options.blob) {
+			const currentState = await store.read(); assertSite(currentState, site);
+			const current = collection(currentState, "entities")["media:" + id]?.data as Media | undefined;
+			if (currentState.collections.entities && current && currentState.collections.entities["media:" + id]?.revision === media.revision && current.pathname === media.pathname && current.digest === media.digest && !current.deleted && typeof current.publishedUrl === "string") url = current.publishedUrl;
+			if (!url) url = await (options.imageBed || uploadToImageBed)(bytes, media.id + "." + EXTENSIONS[media.contentType], media.contentType);
+		} else {
+			const pathname = "published/" + createHash("sha256").update(site).digest("hex").slice(0,16) + "/" + id + "/" + digest + "." + EXTENSIONS[media.contentType];
+			const existing = async (): Promise<string | undefined> => {
+				let metadata: Awaited<ReturnType<typeof head>>;
+				try { metadata = await storage.head(pathname, { token: legacyPublicToken }); } catch (error) { if ((error as Error).constructor.name === "BlobNotFoundError") return; throw error; }
+				const result = await storage.get(pathname, { token: legacyPublicToken, access: "public", useCache: false });
+				if (!result || result.statusCode !== 200 || metadata.size !== media.size || metadata.contentType !== media.contentType) throw new ApiFailure(409, "PUBLISHED_MEDIA_CONFLICT", "已发布媒体校验不一致");
+				const published = await readStream(result.stream, media.size);
+				if (published.length !== media.size || createHash("sha256").update(published).digest("hex") !== digest) throw new ApiFailure(409, "PUBLISHED_MEDIA_CONFLICT", "已发布媒体校验不一致");
+				return metadata.url;
+			};
+			url = await existing();
+			if (!url) {
+				try { await storage.put(pathname, bytes, { access: "public", token: legacyPublicToken, addRandomSuffix: false, allowOverwrite: false, contentType: media.contentType, cacheControlMaxAge: 31536000 }); }
+				catch (error) { if (!(url = await existing())) throw error; }
+				url ||= await existing();
+				if (!url) throw new ApiFailure(409, "PUBLISHED_MEDIA_UNVERIFIED", "公开媒体尚未通过读取核验");
+			}
 		}
-		// Publication metadata may only update the matching draft revision.
 		await store.update((state) => {
-			assertSite(state, site); const row = collection(state, "entities")[`media:${id}`]; const current = row?.data as Media | undefined;
+			assertSite(state, site); const row = collection(state, "entities")["media:" + id]; const current = row?.data as Media | undefined;
 			if (row && current && row.revision === media.revision && current.pathname === media.pathname && current.digest === media.digest && !current.deleted) { current.publishedUrl = url; row.updated_at = new Date().toISOString(); }
 		});
 		urls[id] = url;

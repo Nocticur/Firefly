@@ -11,6 +11,24 @@ export function hostedProduction(
 		(!env.APP_ENV || env.APP_ENV === "production")
 	);
 }
+
+function normalizeHttpsOrigin(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	try {
+		const url = new URL(value.includes("://") ? value : "https://" + value);
+		if (url.protocol !== "https:" || url.username || url.password || url.port || url.pathname !== "/" || url.search || url.hash) return undefined;
+		return url.origin;
+	} catch {
+		return undefined;
+	}
+}
+
+export function projectProductionOrigin(
+	env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+	return normalizeHttpsOrigin(env.VERCEL_PROJECT_PRODUCTION_URL) || normalizeHttpsOrigin(env.VERCEL_URL);
+}
+
 export function previewOrigin(
 	env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {

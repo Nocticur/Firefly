@@ -2,7 +2,7 @@ import { timingSafeEqual, createHash } from "node:crypto";
 import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { RuntimeEnvironment } from "../shared/contracts.js";
-import { hostedProduction, previewOrigin, siteOrigin } from "./runtime-config.js";
+import { hostedProduction, previewOrigin, projectProductionOrigin, siteOrigin } from "./runtime-config.js";
 
 export class ApiFailure extends HTTPException {
 	readonly code: string;
@@ -31,8 +31,7 @@ export function constantTimeEqual(left: string, right: string): boolean {
 export function managementOrigin(): string {
 	const environment = runtimeEnvironment();
 	if (environment === "production") {
-		if (process.env.ADMIN_ORIGIN && process.env.ADMIN_ORIGIN !== siteOrigin) throw new ApiFailure(503, "CONFIGURATION_REQUIRED", "生产管理地址必须与博客一致");
-		return siteOrigin;
+		return projectProductionOrigin() || siteOrigin;
 	}
 	const origin = environment === "preview" ? process.env.ADMIN_PREVIEW_ORIGIN || previewOrigin() : process.env.ADMIN_DEV_ORIGIN || "http://localhost:3000";
 	if (!origin) throw new ApiFailure(503, "CONFIGURATION_REQUIRED", "无法识别预览部署地址，请检查 Vercel 系统变量");

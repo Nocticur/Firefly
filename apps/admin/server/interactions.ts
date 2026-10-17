@@ -19,6 +19,7 @@ import {
 import { parseSourceDocument } from "./source-document.js";
 import {
 	previewOrigin,
+	projectProductionOrigin,
 	publicCommentsEnabled,
 	siteOrigin,
 } from "./runtime-config.js";
@@ -175,16 +176,11 @@ export function publicInteractionOrigin(): string {
 	const environment = runtimeEnvironment();
 	const configured =
 		environment === "production"
-			? siteOrigin
+			? projectProductionOrigin() || siteOrigin
 			: environment === "preview"
 				? process.env.PUBLIC_PREVIEW_ORIGIN || previewOrigin()
 				: process.env.PUBLIC_DEV_ORIGIN || "http://localhost:4321";
-	if (
-		!configured ||
-		(environment === "production" &&
-			process.env.PUBLIC_SITE_ORIGIN &&
-			process.env.PUBLIC_SITE_ORIGIN !== configured)
-	)
+	if (!configured)
 		throw new ApiFailure(
 			503,
 			"INTERACTION_CONFIGURATION_REQUIRED",

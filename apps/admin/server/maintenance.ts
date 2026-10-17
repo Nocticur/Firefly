@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { get, put } from "@vercel/blob";
+import { del, get, put } from "@vercel/blob";
 import { start } from "workflow/api";
 import { z } from "zod";
 import type { AdminApp } from "./types.js";
@@ -47,6 +47,7 @@ type Backup = {
 	mediaManifest: Row[];
 };
 const terminal = new Set(["verified", "failed", "conflict", "blocked"]);
+export const DATA_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const hash = (value: Uint8Array | string) =>
 	createHash("sha256").update(value).digest("hex");
 const LEASE_MS = 600000;
@@ -54,6 +55,7 @@ type Lease = { id: string; owner: string; fence: number };
 export interface BackupBlobProvider {
 	put(pathname: string, bytes: Buffer): Promise<void>;
 	get(pathname: string): Promise<Buffer | null>;
+	delete(pathname: string): Promise<void>;
 }
 const privateBackupBlob: BackupBlobProvider = {
 	async put(pathname, bytes) {
@@ -94,6 +96,9 @@ const privateBackupBlob: BackupBlobProvider = {
 			reader.releaseLock();
 		}
 		return Buffer.concat(chunks);
+	},
+	async delete(pathname) {
+		await del(pathname, { token: blobToken("private") });
 	},
 };
 export type MaintenanceDependencies = {
@@ -479,6 +484,140 @@ function safeToRestore(state: StoreState): void {
 			"有结果未明确的发布，先完成 Git/生产核验再恢复",
 		);
 }
+
+export type CleanupSummary = {
+	postVersions: number;
+	releaseTasks: number;
+	releaseSnapshots: number;
+	backups: number;
+	maintenanceOutbox: number;
+	backupClaims: number;
+};
+
+function isOlderThanRetention(value: unknown, cutoff: number): boolean {
+	if (typeof value !== "string") return false;
+	const timestamp = Date.parse(value);
+	return Number.isFinite(timestamp) && timestamp <= cutoff;
+}
+
+/** Prune aged administrative history without deleting live drafts or the current publication baseline. */
+export async function cleanupExpiredData(
+	store: FileStore,
+	site: string,
+	blob: BackupBlobProvider = privateBackupBlob,
+	now = Date.now(),
+): Promise<CleanupSummary> {
+	const cutoff = now - DATA_RETENTION_MS;
+	const summary: CleanupSummary = {
+		postVersions: 0,
+		releaseTasks: 0,
+		releaseSnapshots: 0,
+		backups: 0,
+		maintenanceOutbox: 0,
+		backupClaims: 0,
+	};
+	const before = await store.read();
+	assertSite(before, site);
+	const backupCandidates = Object.values(
+		collection(before, "maintenance_backups"),
+	).filter(
+		(row) =>
+			row.state === "verified" &&
+			typeof row.pathname === "string" &&
+			isOlderThanRetention(row.created_at, cutoff),
+	);
+	const deletedBackups = new Set<string>();
+	for (const backup of backupCandidates) {
+		try {
+			await blob.delete(String(backup.pathname));
+			deletedBackups.add(String(backup.id));
+		} catch {
+			// Keep the index if the immutable object could not be deleted.
+		}
+	}
+	return store.update((state) => {
+		assertSite(state, site);
+		const entities = collection(state, "entities");
+		for (const [id, row] of Object.entries(entities)) {
+			if (
+				row.kind === "post_version" &&
+				isOlderThanRetention(row.created_at ?? (row.data as Row)?.createdAt, cutoff)
+			) {
+				delete entities[id];
+				summary.postVersions++;
+			}
+		}
+
+		const tasks = collection(state, "release_tasks");
+		const baseline = entities["repository:baseline"]?.data as Row | undefined;
+		const baselineTaskId = typeof baseline?.taskId === "string" ? baseline.taskId : "";
+		const baselineSnapshotId = typeof baseline?.snapshotId === "string" ? baseline.snapshotId : "";
+		for (const [id, row] of Object.entries(tasks)) {
+			const publishTask = row.kind === "publish";
+			const pruneableState = ["verified", "failed", "conflict"].includes(String(row.state));
+			const details = (row.details ?? {}) as Row;
+			if (
+				id === baselineTaskId ||
+				!pruneableState ||
+				Boolean(details.restoreRequiresReconciliation) ||
+				(row.state === "verified" && details.finalizationState === "pending") ||
+				!isOlderThanRetention(row.created_at, cutoff)
+			)
+				continue;
+			if (!publishTask && !["backup", "restore", "daily"].includes(String(row.kind)))
+				continue;
+			delete tasks[id];
+			summary.releaseTasks++;
+		}
+
+		const referencedSnapshots = new Set(
+			Object.values(tasks)
+				.map((row) => row.snapshot_id)
+				.filter((id): id is string => typeof id === "string" && id.length > 0),
+		);
+		if (baselineSnapshotId) referencedSnapshots.add(baselineSnapshotId);
+		const snapshots = collection(state, "release_snapshots");
+		for (const [id, row] of Object.entries(snapshots)) {
+			if (
+				!referencedSnapshots.has(id) &&
+				isOlderThanRetention(row.created_at, cutoff)
+			) {
+				delete snapshots[id];
+				summary.releaseSnapshots++;
+			}
+		}
+
+		const backups = collection(state, "maintenance_backups");
+		for (const [id, row] of Object.entries(backups)) {
+			if (deletedBackups.has(id) && isOlderThanRetention(row.created_at, cutoff)) {
+				delete backups[id];
+				summary.backups++;
+			}
+		}
+
+		const cutoffDate = new Date(cutoff).toISOString().slice(0, 10);
+		const outbox = collection(state, "maintenance_outbox");
+		for (const [dateKey, row] of Object.entries(outbox)) {
+			if (/^\d{4}-\d{2}-\d{2}$/.test(dateKey) && dateKey < cutoffDate) {
+				delete outbox[dateKey];
+				summary.maintenanceOutbox++;
+			}
+		}
+		const claims = collection(state, "maintenance_backup_claims");
+		for (const [id, row] of Object.entries(claims)) {
+			if (
+				!row.owner_id &&
+				isOlderThanRetention(row.lease_until, cutoff) &&
+				!backups[id]
+			) {
+				delete claims[id];
+				summary.backupClaims++;
+			}
+		}
+		return summary;
+	});
+}
+
 export async function restoreBackup(
 	backupId: string,
 	taskId: string,
@@ -798,6 +937,13 @@ export function registerMaintenanceRoutes(app: AdminApp): void {
 			)
 		)
 			throw new ApiFailure(401, "CRON_AUTH_REQUIRED", "Cron 鉴权失败");
+		if (!productionEnvironment(true))
+			throw new ApiFailure(403, "PRODUCTION_PERMISSION_REQUIRED", "Cron 仅能在生产环境执行");
+		const store = getStore();
+		const site = getSiteId();
+		const cleanup = await cleanupExpiredData(store, site);
+		if (!(await serviceEnabled("maintenance", store, site)))
+			return c.json({ data: { state: "cleanup_only", cleanup } });
 		await assertMaintenance();
 		const dateKey = new Intl.DateTimeFormat("en-CA", {
 			timeZone: "Asia/Shanghai",
