@@ -8,6 +8,29 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const output = path.join(root, ".vercel/output");
 const staticRoot = path.join(output, "static");
 
+test("friend monitoring runs approximately every six days and captures in the same run", async () => {
+	const workflow = await readFile(
+		path.join(root, ".github/workflows/check-friends.yml"),
+		"utf8",
+	);
+	assert.match(workflow, /cron:\s*['"]10 5 1,7,13,19,25 \* \*['"]/);
+	assert.doesNotMatch(workflow, /10 5,17 \* \* \*/);
+	assert.doesNotMatch(workflow, /DUE_ONLY|--due-only/);
+});
+
+test("integrated deployment keeps the daily maintenance Cron only at the project level", async () => {
+	const projectConfig = JSON.parse(
+		await readFile(path.join(root, "vercel.json"), "utf8"),
+	);
+	const outputConfig = JSON.parse(
+		await readFile(path.join(output, "config.json"), "utf8"),
+	);
+	assert.deepEqual(projectConfig.crons, [
+		{ path: "/api/maintenance/cron", schedule: "0 19 * * *" },
+	]);
+	assert.ok(!outputConfig.crons || outputConfig.crons.length === 0);
+});
+
 test("one Vercel output contains the unchanged static blog and release files", async () => {
 	assert.ok(
 		await stat(path.join(output, "config.json")).catch(() => null),

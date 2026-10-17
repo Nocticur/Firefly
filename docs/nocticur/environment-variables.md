@@ -19,7 +19,7 @@
 | 核验生产发布 | `VERCEL_TOKEN` | 选择当前项目团队作用域，程序读取实际生产部署结果 |
 | 发布后台上传的图片 | `BLOB_PUBLIC_READ_WRITE_TOKEN` | 另一个 **Public Blob store** 的 token，必须与 Private store 分开 |
 | 接收友链申请或本站评论 | `PUBLIC_TURNSTILE_SITE_KEY`、`TURNSTILE_SECRET_KEY` | 同一个 Turnstile 小组件的公钥和私钥，允许博客域名 |
-| 每日备份和维护 | `CRON_SECRET` | 按需添加独立随机值，Cron 继续校验 Bearer secret |
+| Vercel 每日维护 Cron | `CRON_SECRET` | 已配置 Cron 的必需生产 Secret；使用独立随机值，接口以 Bearer 校验。维护业务开关仍默认关闭 |
 
 除 App ID 和 Turnstile Site key 外均设为 Secret。服务密钥不能填写到公开 JSON、文章、后台表单或 Git。后台只保存服务的开启状态，不接收服务密钥。
 

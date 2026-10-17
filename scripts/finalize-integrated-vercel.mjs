@@ -55,7 +55,7 @@ export async function finalizeIntegratedVercel() {
 		userRoutes: transformed.routes || [],
 		builds: [{ entrypoint: ".", use: "nitro", routes: config.routes }],
 	});
-	config.crons = deploymentConfig.crons;
+	delete config.crons;
 	await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 

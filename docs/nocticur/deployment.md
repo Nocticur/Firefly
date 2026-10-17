@@ -34,6 +34,10 @@ Private Blob 保存后台状态 JSON、私有媒体和备份，Public Blob 只�
 
 ## 维护
 
-每日 Cron 入口为 `/api/maintenance/cron`，北京时间次日 03:00，需 CRON_SECRET 的 Bearer 校验。维护默认关闭，同一天的定时任务保持幂等；后台文件、备份与任务独立保留。无须另装数据库或运行 SQL 作业。
+Vercel 每日 Cron 入口为 `/api/maintenance/cron`，配置时间 `0 19 * * *`（UTC），即北京时间次日 03:00，需 `CRON_SECRET` Bearer 校验。维护默认关闭，同一天的定时任务保持幂等；后台文件、备份与任务独立保留。无须另装数据库或运行 SQL 作业。
+
+## 友链检测
+
+GitHub Actions 每月 1、7、13、19、25 日北京时间 13:10 执行一次友链状态检测和主页截图。GitHub cron 使用 UTC（`10 5 1,7,13,19,25 * *`）；这是每 6 天的日历近似调度，月末间隔会随月份长度变化。可在 Actions 手动运行 `status_only`、`screenshots_only` 或 `both`，也可填写友链名称或 URL 关键词限定目标。
 
 用量与套餐见 [免费部署说明](./free-deployment.md)。此前有关独立后台、Neon、迁移和云工作区数据库的说明已被本页替代。

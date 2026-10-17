@@ -2,8 +2,8 @@ name: Check friend sites and screenshots
 
 on:
   schedule:
-    # 01:10 and 13:10 Asia/Shanghai; screenshot age is checked in the script.
-    - cron: '10 5,17 * * *'
+    # Approximately every six days at 13:10 Asia/Shanghai (GitHub cron is UTC).
+    - cron: '10 5 1,7,13,19,25 * *'
   workflow_dispatch:
     inputs:
       task:
@@ -32,7 +32,6 @@ jobs:
     env:
       TASK: ${{ inputs.task || 'both' }}
       TARGET_LINK: ${{ inputs.target_link || '' }}
-      DUE_ONLY: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
       ASTRO_TELEMETRY_DISABLED: '1'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -55,21 +54,13 @@ jobs:
       - name: Plan screenshots
         id: plan
         if: env.TASK != 'status_only'
-        shell: bash
-        run: |
-          flags=()
-          if [ "$DUE_ONLY" = true ]; then flags+=(--due-only); fi
-          pnpm exec tsx scripts/check-friends.ts --task screenshots_only --target "$TARGET_LINK" --plan "${flags[@]}"
+        run: pnpm exec tsx scripts/check-friends.ts --task screenshots_only --target "$TARGET_LINK" --plan
       - name: Install Chromium only when captures are needed
         if: steps.plan.outputs.needs_screenshots == 'true'
         run: pnpm exec playwright install --with-deps chromium
       - name: Capture site homepages
         if: steps.plan.outputs.needs_screenshots == 'true'
-        shell: bash
-        run: |
-          flags=()
-          if [ "$DUE_ONLY" = true ]; then flags+=(--due-only); fi
-          pnpm exec tsx scripts/check-friends.ts --task screenshots_only --target "$TARGET_LINK" "${flags[@]}"
+        run: pnpm exec tsx scripts/check-friends.ts --task screenshots_only --target "$TARGET_LINK"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: friend-health

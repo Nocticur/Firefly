@@ -116,7 +116,7 @@ test("a targeted run retains unrelated results and does not retain removed targe
 	assert.deepEqual(mergeHealthResults([a, b], [], [a.url]), [a]);
 });
 
-test("screenshots use elapsed six days and preserve old successes until a new capture succeeds", () => {
+test("screenshots become due at six elapsed days and preserve old successes until a new capture succeeds", () => {
 	const result = createHealthResult(
 		{ url: "https://a.example/", name: "A" },
 		{ ok: true, statusCode: 200, latencyMs: 100, backlink: "unchecked" },
@@ -124,7 +124,7 @@ test("screenshots use elapsed six days and preserve old successes until a new ca
 		"2026-10-16T00:00:00Z",
 	);
 	assert.equal(
-		shouldTakeScreenshot(result, Date.parse("2026-10-16T00:00:00Z")),
+		shouldTakeScreenshot(result, Date.parse("2026-10-17T23:59:59Z")),
 		true,
 	);
 	result.screenshotAt = "2026-10-12T00:00:00Z";
