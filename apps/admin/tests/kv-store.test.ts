@@ -6,6 +6,7 @@ import {
 	decodeState,
 	encodeState,
 	kvCommand,
+	normalizeKvConfig,
 	stateKeys,
 	type KvConfig,
 } from "../server/kv.js";
@@ -68,6 +69,15 @@ async function withFetch<T>(
 function json(result: unknown): Response {
 	return Response.json({ result });
 }
+
+test("KV URL accepts copied trailing path, quotes and default port but rejects console/redis URLs", () => {
+	assert.equal(normalizeKvConfig("https://kv.example.invalid/", "token").url, "https://kv.example.invalid");
+	assert.equal(normalizeKvConfig(" 'https://kv.example.invalid/redis' ", "token").url, "https://kv.example.invalid");
+	assert.equal(normalizeKvConfig("https://kv.example.invalid:443/set/foo/bar", "token").url, "https://kv.example.invalid");
+	assert.throws(() => normalizeKvConfig("redis://default:secret@kv.example.invalid:6379", "token"), failure("KV_CONFIGURATION_REQUIRED", 503));
+	assert.throws(() => normalizeKvConfig("https://console.upstash.com/redis/abc", "token"), failure("KV_CONFIGURATION_REQUIRED", 503));
+	assert.throws(() => normalizeKvConfig("https://user:pass@kv.example.invalid", "token"), failure("KV_CONFIGURATION_REQUIRED", 503));
+});
 
 test("state encoding round-trips and keys are stable per site", () => {
 	const jsonText = JSON.stringify({ hello: "world", n: 1 });

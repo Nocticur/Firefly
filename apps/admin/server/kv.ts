@@ -13,15 +13,37 @@ const COMMAND_TIMEOUT_MS = 20_000;
 type KvResponse = { result?: unknown; error?: unknown };
 
 function normalizeUrl(value: string): string {
-	const trimmed = value.trim().replace(/\/+$/, "");
+	// Vercel UI / copy-paste sometimes adds quotes or a trailing slash. Upstash
+	// REST commands always go to the origin, so tolerate a copied command path
+	// and normalize it instead of blocking login on a harmless extra segment.
+	const unquoted = value.trim().replace(/^(['"])(.*)\1$/s, "$2").trim();
 	let url: URL;
 	try {
-		url = new URL(trimmed);
+		url = new URL(unquoted);
 	} catch {
 		throw new ApiFailure(503, "KV_CONFIGURATION_REQUIRED", "KV_REST_API_URL 无效");
 	}
-	if (url.protocol !== "https:" || url.username || url.password || url.port || url.pathname !== "/" || url.search || url.hash)
-		throw new ApiFailure(503, "KV_CONFIGURATION_REQUIRED", "KV_REST_API_URL 必须是无路径的 HTTPS 地址");
+	if (url.protocol !== "https:")
+		throw new ApiFailure(
+			503,
+			"KV_CONFIGURATION_REQUIRED",
+			"KV_REST_API_URL 必须是 https:// 开头的 Upstash REST Endpoint，不要填 redis:// 或控制台地址",
+		);
+	if (url.username || url.password)
+		throw new ApiFailure(
+			503,
+			"KV_CONFIGURATION_REQUIRED",
+			"KV_REST_API_URL 不能包含用户名或密码",
+		);
+	if (
+		url.hostname === "console.upstash.com" ||
+		url.hostname.endsWith(".upstash.com")
+	)
+		throw new ApiFailure(
+			503,
+			"KV_CONFIGURATION_REQUIRED",
+			"KV_REST_API_URL 请填 Upstash 数据库页面的 Endpoint（形如 https://xxx.upstash.io），不要填控制台地址",
+		);
 	return url.origin;
 }
 

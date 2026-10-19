@@ -9,7 +9,7 @@
 | 变量 | 填什么 | 用途 |
 | --- | --- | --- |
 | `ADMIN_ENTRY_PASSWORD` | 自己设置的 3～10 个字符密码，建议 10 位随机字符；设为 **Secret** | 后台登录；服务端自动加盐 scrypt 哈希后核对 |
-| `KV_REST_API_URL` | Upstash Redis 的 REST 地址（Vercel Marketplace 集成通常自动注入；也接受 `UPSTASH_REDIS_REST_URL`） | 保存私有状态与备份 |
+| `KV_REST_API_URL` | Upstash 数据库页面的 **Endpoint**，形如 `https://xxx.upstash.io`（只填这一段；不要填 `console.upstash.com`、`redis://`、`/redis` 或 `/set/...` 命令地址） | 保存私有状态与备份 |
 | `KV_REST_API_TOKEN` | Upstash REST token；设为 **Secret**（也接受 `UPSTASH_REDIS_REST_TOKEN`） | 同上，写请求鉴权 |
 | `IMGBED_API_TOKEN` | CloudFlare-ImgBed API Token；使用媒体库时必填，设为 **Secret** | 服务端上传图片到图床 |
 | `IMGBED_BASE_URL` | 可选，默认 `https://image.nocticur.eu.cc` | 图床地址；只有地址改变时才填 |
