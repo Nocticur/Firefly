@@ -1,11 +1,12 @@
 /**
- * One-off migration: Vercel Blob private document -> Upstash KV + ImgBed.
+ * One-off migration: Vercel Blob private document -> Cloudflare KV or Upstash + ImgBed.
  *
  * Run locally with production credentials before deploying the KV build:
- *   BLOB_PRIVATE_READ_WRITE_TOKEN=... \
- *   KV_REST_API_URL=... KV_REST_API_TOKEN=... \
- *   IMGBED_API_TOKEN=... IMGBED_BASE_URL=... \
- *   APP_ENV=production GITHUB_REPOSITORY=Nocticur/Firefly \
+ *   BLOB_PRIVATE_READ_WRITE_TOKEN=...
+ *   CF_ACCOUNT_ID=... CF_KV_NAMESPACE_ID=... CF_API_TOKEN=...   (Cloudflare)
+ *   or KV_REST_API_URL=... KV_REST_API_TOKEN=...                 (Upstash)
+ *   IMGBED_API_TOKEN=... IMGBED_BASE_URL=...
+ *   APP_ENV=production GITHUB_REPOSITORY=Nocticur/Firefly
  *   pnpm exec tsx scripts/migrate-blob-to-kv.ts
  *
  * It reads the current private state, uploads legacy draft media to ImgBed,
@@ -48,9 +49,24 @@ const keys = {
 	data: `admin-state:${siteHash}:data`,
 };
 
-const kvUrl = required("KV_REST_API_URL").replace(/\/+$/, "");
-const kvToken = required("KV_REST_API_TOKEN");
-if (!/^https:\/\/[^/]+$/.test(kvUrl))
+const cfAccount =
+	process.env.CF_ACCOUNT_ID?.trim() ||
+	process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+const cfNamespace =
+	process.env.CF_KV_NAMESPACE_ID?.trim() ||
+	process.env.CLOUDFLARE_KV_NAMESPACE_ID?.trim();
+const cfToken =
+	process.env.CF_API_TOKEN?.trim() ||
+	process.env.CLOUDFLARE_API_TOKEN?.trim();
+const useCloudflare = Boolean(cfAccount || cfNamespace || cfToken);
+if (useCloudflare && (!cfAccount || !cfNamespace || !cfToken))
+	throw new Error(
+		"Cloudflare KV requires CF_ACCOUNT_ID, CF_KV_NAMESPACE_ID and CF_API_TOKEN",
+	);
+
+const kvUrl = useCloudflare ? "" : required("KV_REST_API_URL").replace(/\/+$/, "");
+const kvToken = useCloudflare ? "" : required("KV_REST_API_TOKEN");
+if (kvUrl && !/^https:\/\/[^/]+$/.test(kvUrl))
 	throw new Error("KV_REST_API_URL must be an HTTPS origin");
 
 async function kv<T>(command: unknown[]): Promise<T> {
@@ -70,6 +86,54 @@ async function kv<T>(command: unknown[]): Promise<T> {
 		throw new Error("KV command failed");
 	return payload.result as T;
 }
+
+function cloudflareValueUrl(key: string): string {
+	return `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cfAccount!)}/storage/kv/namespaces/${encodeURIComponent(cfNamespace!)}/values/${encodeURIComponent(key)}`;
+}
+
+async function cloudflareGet(key: string): Promise<string | null> {
+	const response = await fetch(cloudflareValueUrl(key), {
+		headers: { Authorization: `Bearer ${cfToken!}` },
+		signal: AbortSignal.timeout(30_000),
+	});
+	if (response.status === 404) {
+		await response.body?.cancel().catch(() => {});
+		return null;
+	}
+	if (!response.ok) throw new Error(`Cloudflare KV read failed (${response.status})`);
+	const text = await response.text();
+	return text || null;
+}
+
+async function cloudflarePut(key: string, value: string): Promise<void> {
+	const response = await fetch(cloudflareValueUrl(key), {
+		method: "PUT",
+		headers: {
+			Authorization: `Bearer ${cfToken!}`,
+			"Content-Type": "text/plain; charset=utf-8",
+		},
+		body: value,
+		signal: AbortSignal.timeout(30_000),
+	});
+	const payload = (await response.json().catch(() => null)) as
+		| { success?: boolean; errors?: Array<{ message?: string }> }
+		| null;
+	if (!response.ok || payload?.success === false)
+		throw new Error(
+			`Cloudflare KV write failed (${response.status}): ${payload?.errors?.[0]?.message || "unknown error"}`,
+		);
+}
+
+async function readStateValue(): Promise<string | null> {
+	if (useCloudflare) return cloudflareGet(keys.data);
+	const existing = await kv<[string | null, string | null]>([
+		"MGET",
+		keys.meta,
+		keys.data,
+	]);
+	return existing[1];
+}
+
 
 const blobToken = required("BLOB_PRIVATE_READ_WRITE_TOKEN");
 const storeId = blobToken.split("_")[3];
@@ -153,12 +217,8 @@ type Media = Record<string, unknown> & {
 };
 
 async function main(): Promise<void> {
-	const existing = await kv<[string | null, string | null]>([
-		"MGET",
-		keys.meta,
-		keys.data,
-	]);
-	if (existing[1])
+	const existing = await readStateValue();
+	if (existing)
 		throw new Error(
 			"KV already contains an admin state document; refusing to overwrite it. Verify the KV database before retrying.",
 		);
@@ -221,19 +281,19 @@ async function main(): Promise<void> {
 	if (Buffer.byteLength(encoded, "utf8") > MAX_KV_VALUE_BYTES)
 		throw new Error("Migrated state exceeds the KV value limit");
 	const etag = randomUUID();
-	await kv(["MSET", keys.meta, etag, keys.data, encoded]);
-	const check = await kv<[string | null, string | null]>([
-		"MGET",
-		keys.meta,
-		keys.data,
-	]);
-	if (check[0] !== etag || typeof check[1] !== "string")
+	if (useCloudflare) {
+		await cloudflarePut(keys.data, encoded);
+	} else {
+		await kv(["MSET", keys.meta, etag, keys.data, encoded]);
+	}
+	const check = await readStateValue();
+	if (typeof check !== "string")
 		throw new Error("KV read-back verification failed");
-	const readBack = gunzipSync(Buffer.from(check[1], "base64")).toString("utf8");
+	const readBack = gunzipSync(Buffer.from(check, "base64")).toString("utf8");
 	if (sha256(readBack) !== sha256(json))
 		throw new Error("KV read-back checksum mismatch");
 	console.log(
-		`Migrated ${migratedMedia} media item(s), skipped ${skippedMedia}, state=${Buffer.byteLength(json)} bytes, etag=${etag}.`,
+		`Migrated ${migratedMedia} media item(s), skipped ${skippedMedia}, state=${Buffer.byteLength(json)} bytes, ${useCloudflare ? "Cloudflare KV" : `etag=${etag}`}.`,
 	);
 	console.log(
 		"Legacy Blob backup objects were not copied. Restore them before cutover if they are still needed.",

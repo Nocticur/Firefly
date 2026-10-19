@@ -1,6 +1,6 @@
 # 环境变量
 
-博客、`/admin/` 和 `/api/` 部署在同一个 Vercel `firefly` 项目。后台私有状态存 Upstash Redis KV，图片走 CloudFlare-ImgBed；不需要数据库连接、建表或 SQL 迁移，也不使用 Vercel Blob。
+博客、`/admin/` 和 `/api/` 部署在同一个 Vercel `firefly` 项目。后台私有状态存 **Upstash Redis KV 或 Cloudflare KV**（二选一），图片走 CloudFlare-ImgBed；不需要数据库连接、建表或 SQL 迁移，也不使用 Vercel Blob。
 
 变量在 Vercel 项目 **Settings → Environment Variables** 中配置。生产 Secret 只勾选 **Production**；Vercel 需开启 **Enable access to System Environment Variables**，否则读不到平台注入的地址与项目编号。
 
@@ -9,12 +9,20 @@
 | 变量 | 填什么 | 用途 |
 | --- | --- | --- |
 | `ADMIN_ENTRY_PASSWORD` | 自己设置的 3～10 个字符密码，建议 10 位随机字符；设为 **Secret** | 后台登录；服务端自动加盐 scrypt 哈希后核对 |
-| `KV_REST_API_URL` | Upstash 数据库页面的 **Endpoint**，形如 `https://xxx.upstash.io`（只填这一段；不要填 `console.upstash.com`、`redis://`、`/redis` 或 `/set/...` 命令地址） | 保存私有状态与备份 |
-| `KV_REST_API_TOKEN` | Upstash REST token；设为 **Secret**（也接受 `UPSTASH_REDIS_REST_TOKEN`） | 同上，写请求鉴权 |
+| `KV_PROVIDER` | 可选：`cloudflare` 或 `upstash`；两种都配置时用它指定 | 选择 KV 后端 |
+| `CF_ACCOUNT_ID` | Cloudflare 账户 ID（32 位十六进制） | **Cloudflare 方案**：账户标识 |
+| `CF_KV_NAMESPACE_ID` | Cloudflare KV 命名空间 ID（32 位十六进制） | **Cloudflare 方案**：KV 命名空间 |
+| `CF_API_TOKEN` | Cloudflare API Token，权限至少 **Workers KV Storage:Edit**；设为 **Secret** | **Cloudflare 方案**：读写 KV |
+| `KV_REST_API_URL` | Upstash 数据库页面的 **Endpoint**，形如 `https://xxx.upstash.io`（只填这一段） | **Upstash 方案**：REST 地址 |
+| `KV_REST_API_TOKEN` | Upstash REST token；设为 **Secret** | **Upstash 方案**：写请求鉴权 |
 | `IMGBED_API_TOKEN` | CloudFlare-ImgBed API Token；使用媒体库时必填，设为 **Secret** | 服务端上传图片到图床 |
 | `IMGBED_BASE_URL` | 可选，默认 `https://image.nocticur.eu.cc` | 图床地址；只有地址改变时才填 |
 
-生产缺少 `KV_REST_API_URL/TOKEN` 时后台明确报配置错误并拒绝保存，不会回退到内存或临时磁盘。首次写入自动创建 `admin-state:<sha256(siteId)>:meta` 与 `:data`，无需初始化。
+**KV 二选一**：只填 Cloudflare 的 `CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` / `CF_API_TOKEN`，或只填 Upstash 的 `KV_REST_API_URL` / `KV_REST_API_TOKEN`。两者都填时默认使用 Cloudflare，可用 `KV_PROVIDER=upstash` 切回 Upstash。也接受 `CLOUDFLARE_ACCOUNT_ID`、`CLOUDFLARE_KV_NAMESPACE_ID`、`CLOUDFLARE_API_TOKEN` 别名。
+
+生产缺少所选 KV 配置时后台明确报配置错误并拒绝保存，不会回退到内存或临时磁盘。首次写入自动创建状态文档，无需初始化。
+
+> Cloudflare KV 是最终一致、无原子 CAS、同 key 约 1 次/秒写入；并发写可能后写覆盖、跨区域可能短暂读到旧值。个人单管理员博客通常可用，但高并发后台不适合。Upstash 提供强一致和原子 CAS，是更稳的选择。
 
 ## 发布与仓库
 
@@ -58,8 +66,10 @@ App 权限：Contents read/write、Metadata read。服务密钥不能填写到�
 | `PUBLIC_DEV_ORIGIN` | `http://localhost:4321` | 开发时博客源 |
 | `ADMIN_PREVIEW_ORIGIN` | 平台 `VERCEL_URL` | 预览环境管理源覆盖 |
 | `PUBLIC_PREVIEW_ORIGIN` | 平台 `VERCEL_URL` | 预览环境博客源覆盖 |
-| `ADMIN_DEV_KV_REST_API_URL` / `ADMIN_DEV_KV_REST_API_TOKEN` | 不填用内存存储 | 开发环境独立 KV |
-| `ADMIN_PREVIEW_KV_REST_API_URL` / `ADMIN_PREVIEW_KV_REST_API_TOKEN` | 不填用内存存储 | 预览环境独立 KV |
+| `ADMIN_DEV_KV_REST_API_URL` / `ADMIN_DEV_KV_REST_API_TOKEN` | 不填用内存存储 | 开发环境独立 Upstash |
+| `ADMIN_DEV_CF_ACCOUNT_ID` / `ADMIN_DEV_CF_KV_NAMESPACE_ID` / `ADMIN_DEV_CF_API_TOKEN` | 不填用内存存储 | 开发环境独立 Cloudflare KV |
+| `ADMIN_PREVIEW_KV_REST_API_URL` / `ADMIN_PREVIEW_KV_REST_API_TOKEN` | 不填用内存存储 | 预览环境独立 Upstash |
+| `ADMIN_PREVIEW_CF_ACCOUNT_ID` / `ADMIN_PREVIEW_CF_KV_NAMESPACE_ID` / `ADMIN_PREVIEW_CF_API_TOKEN` | 不填用内存存储 | 预览环境独立 Cloudflare KV |
 
 开发/预览未配置独立 KV 时使用内存存储，重启清空；两者都必须与生产 KV 不同，否则后台拒绝启动。每个非生产环境还需自己的后台密码与第三方服务凭据。本地默认 `development`，不需要 `APP_ENV`。
 
@@ -78,11 +88,11 @@ App 权限：Contents read/write、Metadata read。服务密钥不能填写到�
 - `ADMIN_ORIGIN`、`PUBLIC_SITE_ORIGIN`（已改为读取 Vercel 项目地址）
 - 所有数据库变量（`DATABASE_URL`、`POSTGRES_*`、Neon 连接串等）
 
-从 Blob 迁移期间可临时保留 `BLOB_PRIVATE_READ_WRITE_TOKEN`，用生产凭据在本地运行 `pnpm exec tsx scripts/migrate-blob-to-kv.ts`（脚本通过原始 HTTPS 读取 Blob，不依赖 `@vercel/blob`）；迁移完成并验证后删除该脚本与 `BLOB_PRIVATE_READ_WRITE_TOKEN`。不要再新增任何 Blob 或数据库变量。
+从 Blob 迁移期间可临时保留 `BLOB_PRIVATE_READ_WRITE_TOKEN`，用生产凭据在本地运行 `pnpm exec tsx scripts/migrate-blob-to-kv.ts`（需要所选 KV 的凭据：Cloudflare 三件套或 Upstash URL/TOKEN；脚本通过原始 HTTPS 读取 Blob，不依赖 `@vercel/blob`）；迁移完成并验证后删除该脚本与 `BLOB_PRIVATE_READ_WRITE_TOKEN`。不要再新增任何 Blob 或数据库变量。
 
-## Upstash 的定位
+## KV 的定位
 
-Upstash 在这里只当 KV 使用，**不是关系型数据库**：没有表、索引、SQL、连接池或迁移命令。后台把整个状态文档压缩后写入两个 key，并用 Redis 脚本按 ETag 原子交换，避免并发覆盖。备份是 `admin-backup:<sha256(siteId)>:<sha256(backupId)>:<checksum>` 的不可变对象。状态文档解码后上限 16 MiB、编码后上限 8 MiB，单个备份上限 8 MiB；达到上限会返回 `507` 并拒绝写入，应清理历史而不是升级套餐。
+Upstash / Cloudflare KV 在这里只当键值存储使用，**不是关系型数据库**：没有表、索引、SQL、连接池或迁移命令。后台把整个状态文档压缩后写入键值；Upstash 用 Redis 脚本按 ETag 原子交换，Cloudflare KV 只能读后写并在写入前比较内容摘要（无原子 CAS）。备份是 `admin-backup:<sha256(siteId)>:<sha256(backupId)>:<checksum>` 的不可变对象。状态文档解码后上限 16 MiB、编码后上限 8 MiB，单个备份上限 8 MiB；达到上限会返回 `507` 并拒绝写入，应清理历史而不是升级套餐。
 
 ## 服务开关与隔离
 

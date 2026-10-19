@@ -48,8 +48,9 @@ function normalizeUrl(value: string): string {
 }
 
 export function normalizeKvConfig(url: string, token: string): KvConfig {
-	if (!token || token.length > 4096) throw new ApiFailure(503, "KV_CONFIGURATION_REQUIRED", "KV_REST_API_TOKEN 无效");
-	return { url: normalizeUrl(url), token };
+	const value = token.trim();
+	if (!value || value.length > 4096) throw new ApiFailure(503, "KV_CONFIGURATION_REQUIRED", "KV_REST_API_TOKEN 无效");
+	return { url: normalizeUrl(url), token: value };
 }
 
 /** Low-level Upstash REST command. Never log the token or full upstream body. */
@@ -61,6 +62,7 @@ export async function kvCommand<T>(config: KvConfig, command: unknown[]): Promis
 			headers: {
 				Authorization: `Bearer ${config.token}`,
 				"Content-Type": "application/json",
+				Accept: "application/json",
 			},
 			body: JSON.stringify(command),
 			signal: AbortSignal.timeout(COMMAND_TIMEOUT_MS),
@@ -68,18 +70,30 @@ export async function kvCommand<T>(config: KvConfig, command: unknown[]): Promis
 	} catch {
 		throw new ApiFailure(503, "KV_UNAVAILABLE", "KV 存储暂时不可用");
 	}
-	const text = await response.text().catch(() => "");
+	const text = (await response.text().catch(() => ""))
+		.replace(/^\uFEFF/, "")
+		.trim();
 	if (Buffer.byteLength(text) > MAX_UPSTREAM_RESPONSE_BYTES)
 		throw new ApiFailure(503, "KV_UNAVAILABLE", "KV 存储返回内容过大");
 	let payload: KvResponse;
 	try {
 		payload = JSON.parse(text) as KvResponse;
 	} catch {
-		throw new ApiFailure(503, "KV_UNAVAILABLE", "KV 存储返回格式无效");
+		const host = new URL(config.url).host;
+		const contentType = response.headers.get("content-type") || "未知 Content-Type";
+		throw new ApiFailure(
+			503,
+			"KV_UNAVAILABLE",
+			`KV 存储返回格式无效（HTTP ${response.status}，${contentType}，${host}）；请确认 KV_REST_API_URL 是 Upstash 数据库页面的 REST Endpoint，且 KV_REST_API_TOKEN 属于同一个数据库`,
+		);
 	}
 	if (!response.ok || payload.error !== undefined) {
 		// Provider error strings can contain key names but never credentials.
-		throw new ApiFailure(503, "KV_UNAVAILABLE", "KV 存储请求失败");
+		throw new ApiFailure(
+			503,
+			"KV_UNAVAILABLE",
+			`KV 存储请求失败（HTTP ${response.status}）；请检查 KV_REST_API_TOKEN 是否有效、是否有读写权限`,
+		);
 	}
 	return payload.result as T;
 }

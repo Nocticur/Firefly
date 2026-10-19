@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { ApiFailure, runtimeEnvironment } from "./security.js";
-import { kvConfig } from "./storage-config.js";
+import { storageConfig } from "./storage-config.js";
 import { createKvDocumentBackend } from "./kv.js";
+import { createCloudflareKvDocumentBackend } from "./cloudflare-kv.js";
 export type Row = Record<string, unknown>;
 export type StoreState = {
 	version: 1;
@@ -233,9 +234,15 @@ export function getStore(): FileStore {
 	const supplied = requestStore.getStore();
 	if (supplied) return supplied;
 	const site = getSiteId();
-	const config = kvConfig();
-	if (config) return createFileStore(createKvDocumentBackend(config, site), site);
+	const config = storageConfig();
+	if (config) {
+		const backend =
+			config.provider === "cloudflare"
+				? createCloudflareKvDocumentBackend(config, site)
+				: createKvDocumentBackend(config, site);
+		return createFileStore(backend, site);
+	}
 	// Development and preview may run without a dedicated KV. Production throws
-	// from kvConfig() above, so an unconfigured server never silently loses data.
+	// from storageConfig() above, so an unconfigured server never silently loses data.
 	return createMemoryStore(site);
 }

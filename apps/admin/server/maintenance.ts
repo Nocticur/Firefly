@@ -18,8 +18,9 @@ import {
 	productionEnvironment,
 	readJson,
 } from "./security.js";
-import { kvConfig } from "./storage-config.js";
+import { storageConfig } from "./storage-config.js";
 import { createKvBackupProvider } from "./kv.js";
+import { createCloudflareKvBackupProvider } from "./cloudflare-kv.js";
 import {
 	processReleaseTask,
 	reconcileVerifiedReleaseFinalization,
@@ -59,14 +60,16 @@ export interface BackupProvider {
 }
 export const MAX_BACKUP_BYTES = 8 * 1024 * 1024;
 function configuredBackupProvider(): BackupProvider {
-	const config = kvConfig();
+	const config = storageConfig();
 	if (!config)
 		throw new ApiFailure(
 			503,
 			"KV_CONFIGURATION_REQUIRED",
 			"缺少 KV 配置，无法读写后台备份",
 		);
-	return createKvBackupProvider(config);
+	return config.provider === "cloudflare"
+		? createCloudflareKvBackupProvider(config)
+		: createKvBackupProvider(config);
 }
 export type MaintenanceDependencies = {
 	store?: FileStore;
