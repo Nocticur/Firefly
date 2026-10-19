@@ -14,10 +14,10 @@ import {
 	createBackup,
 	processMaintenanceTask,
 	restoreBackup,
-	type BackupBlobProvider,
+	type BackupProvider,
 } from "../server/maintenance.js";
 const site = "Nocticur/Firefly:production";
-class MemoryBlob implements BackupBlobProvider {
+class MemoryBlob implements BackupProvider {
 	objects = new Map<string, Buffer>();
 	puts: string[] = [];
 	deletes: string[] = [];

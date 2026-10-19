@@ -43,7 +43,7 @@ test("flat files freeze and verify actual Vercel redirects with the repository c
 			const currentSite = site(); const id = randomUUID(); const originalRepository = repository(id, config);
 			await importRepository(store, currentSite, async () => originalRepository);
 			assert.deepEqual((await baseline(store, currentSite)).deploymentConfig, config);
-			const mediaId = randomUUID(); const media = { id: mediaId, pathname: `drafts/${mediaId}.png`, digest: sha256("frozen bytes"), size: 12, contentType: "image/png" };
+			const mediaId = randomUUID(); const media = { id: mediaId, pathname: `drafts/${mediaId}.png`, digest: sha256("frozen bytes"), size: 12, contentType: "image/png", publishedUrl: "https://image.example/frozen.png" };
 			await store.update((state) => { collection(state, "entities")[`media:${mediaId}`] = { id: mediaId, kind: "media", data: media, revision: 1 }; });
 			const savedSource = source.replace('slug: "云端/旧中文"', 'slug: "云端/新中文"') + `![private image](media:${mediaId})\n`;
 			const edited = await savePost(store, currentSite, id, savedSource, 1);
@@ -53,7 +53,7 @@ test("flat files freeze and verify actual Vercel redirects with the repository c
 			const expectedConfig = { ...config, redirects: [...expectedRedirects.map(({ from, to }) => ({ source: from, destination: to, permanent: true })), config.redirects[0], config.redirects[1]] };
 			assert.deepEqual(frozen.deploymentConfig, expectedConfig); assert.deepEqual(frozen.redirects, expectedRedirects);
 			assert.deepEqual(JSON.parse(frozen.files.find((file) => file.path === "vercel.json")!.source), expectedConfig);
-			let commits = 0; let committedFiles: RepositoryFile[] = []; const publicUrl = "https://example.public.blob.vercel-storage.com/frozen.png";
+			let commits = 0; let committedFiles: RepositoryFile[] = []; const publicUrl = "https://image.example/frozen.png";
 			const git: GitHubProvider = {
 				async readRepositoryFiles() { return originalRepository; },
 				async commit(input) {
@@ -64,7 +64,7 @@ test("flat files freeze and verify actual Vercel redirects with the repository c
 					return firstSha;
 				}, async findCommit() { return null; },
 			};
-			assert.deepEqual(await processReleaseTask(release.id, { store, site: currentSite, github: git, deployment: { async verify(sha, item) { assert.deepEqual(item.deploymentConfig, expectedConfig); return { status: "verified", sha, deploymentId: "first-production" }; } }, skipCapabilityCheck: true, afterVerified: async () => {}, prepareMedia: async (ids, _taskId, item) => { assert.deepEqual(ids, [mediaId]); assert.equal(item.media![mediaId].pathname, media.pathname); return { [mediaId]: publicUrl }; } }), { done: true, state: "verified" });
+			assert.deepEqual(await processReleaseTask(release.id, { store, site: currentSite, github: git, deployment: { async verify(sha, item) { assert.deepEqual(item.deploymentConfig, expectedConfig); return { status: "verified", sha, deploymentId: "first-production" }; } }, skipCapabilityCheck: true, afterVerified: async () => {}, prepareMedia: async (ids, _taskId, item) => { assert.deepEqual(ids, [mediaId]); assert.equal(item.media![mediaId].publishedUrl, media.publishedUrl); return { [mediaId]: publicUrl }; } }), { done: true, state: "verified" });
 			assert.equal(commits, 1); assert.deepEqual((await baseline(store, currentSite)).deploymentConfig, expectedConfig);
 			assert.equal((await getPost(store, currentSite, id)).source, savedSource);
 			const secondSource = savedSource.replace('slug: "云端/新中文"', 'slug: "最终中文"');

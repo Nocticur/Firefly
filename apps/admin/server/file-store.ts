@@ -1,8 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { get, put, BlobPreconditionFailedError } from "@vercel/blob";
 import { ApiFailure, runtimeEnvironment } from "./security.js";
-import { blobToken } from "./storage-config.js";
+import { kvConfig } from "./storage-config.js";
+import { createKvDocumentBackend } from "./kv.js";
 export type Row = Record<string, unknown>;
 export type StoreState = {
 	version: 1;
@@ -224,77 +224,6 @@ export function getSiteId(): string {
 		);
 	return `${repository}:${runtimeEnvironment()}`;
 }
-function privateDocument(site: string): DocumentBackend {
-	const token = blobToken("private");
-	const path = `admin-state/${createHash("sha256").update(site).digest("hex")}/state.json`;
-	return {
-		async read() {
-			const response = await get(path, {
-				token,
-				access: "private",
-				useCache: false,
-			});
-			if (!response) return null;
-			if (response.statusCode !== 200 || !response.blob.etag)
-				throw new ApiFailure(
-					503,
-					"FILE_STORE_READ_FAILED",
-					"无法读取最新后台状态文件",
-				);
-			if (response.blob.size > MAX_STATE_BYTES) {
-				void response.stream.cancel();
-				throw new ApiFailure(
-					503,
-					"FILE_STORE_TOO_LARGE",
-					"后台状态文件超出大小限制",
-				);
-			}
-			const reader = response.stream.getReader();
-			const chunks: Uint8Array[] = [];
-			let size = 0;
-			try {
-				while (true) {
-					const chunk = await reader.read();
-					if (chunk.done) break;
-					size += chunk.value.byteLength;
-					if (size > MAX_STATE_BYTES) {
-						void reader.cancel();
-						throw new ApiFailure(
-							503,
-							"FILE_STORE_TOO_LARGE",
-							"后台状态文件超出大小限制",
-						);
-					}
-					chunks.push(chunk.value);
-				}
-			} finally {
-				reader.releaseLock();
-			}
-			return {
-				json: Buffer.concat(chunks).toString("utf8"),
-				etag: response.blob.etag,
-			};
-		},
-		async write(json, expectedEtag) {
-			try {
-				await put(path, json, {
-					token,
-					access: "private",
-					contentType: "application/json",
-					addRandomSuffix: false,
-					cacheControlMaxAge: 0,
-					...(expectedEtag
-						? { ifMatch: expectedEtag }
-						: { allowOverwrite: false }),
-				});
-				return true;
-			} catch (error) {
-				if (error instanceof BlobPreconditionFailedError) return false;
-				throw error;
-			}
-		},
-	};
-}
 const requestStore = new AsyncLocalStorage<FileStore>();
 /** Server-side composition only: HTTP clients cannot select or replace the store. */
 export function withStore<T>(store: FileStore, operation: () => T): T {
@@ -304,5 +233,9 @@ export function getStore(): FileStore {
 	const supplied = requestStore.getStore();
 	if (supplied) return supplied;
 	const site = getSiteId();
-	return createFileStore(privateDocument(site), site);
+	const config = kvConfig();
+	if (config) return createFileStore(createKvDocumentBackend(config, site), site);
+	// Development and preview may run without a dedicated KV. Production throws
+	// from kvConfig() above, so an unconfigured server never silently loses data.
+	return createMemoryStore(site);
 }

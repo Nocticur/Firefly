@@ -1,13 +1,33 @@
-import { upload } from "@vercel/blob/client";
 import type { MediaRecord } from "../../shared/contracts";
-import { request, sessionToken, write } from "./api";
-export async function uploadMedia(file: File, onProgress?: (percentage: number) => void) {
-	const result = await write<{ id: string; pathname: string }>("/media/intents", { name: file.name, contentType: file.type || "application/octet-stream", size: file.size });
-	const blob = await upload(result.data.pathname, file, { access: "private", handleUploadUrl: "/api/media/upload", clientPayload: JSON.stringify({ intentId: result.data.id, csrfToken: sessionToken() }), multipart: file.size > 5 * 1024 * 1024, onUploadProgress: event => onProgress?.(event.percentage) });
-	for (let attempt = 0; attempt < 12; attempt++) {
-		const media = await request<MediaRecord[]>("/media");
-		if (media.data.some(item => item.id === result.data.id)) return { id: result.data.id, blob };
-		if (attempt < 11) await new Promise(resolve => window.setTimeout(resolve, 1000));
-	}
-	throw new Error("文件已直传，但服务器核验尚未完成。请刷新媒体库检查上传回调后再使用资源。");
+import { sessionToken } from "./api";
+
+type UploadPayload = { data?: MediaRecord; error?: { message?: string } };
+
+/**
+ * Uploads one file through XMLHttpRequest so the media page can show real progress.
+ * The server forwards the bytes to the image host and returns the stored media record.
+ */
+export function uploadMedia(file: File, onProgress?: (percentage: number) => void): Promise<MediaRecord> {
+	return new Promise((resolve, reject) => {
+		const request = new XMLHttpRequest();
+		request.open("POST", "/api/media/upload", true);
+		request.setRequestHeader("X-CSRF-Token", sessionToken());
+		request.upload.onprogress = (event) => {
+			if (!event.lengthComputable || event.total <= 0) return;
+			onProgress?.(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+		};
+		request.onload = () => {
+			let body: UploadPayload | null = null;
+			try { body = JSON.parse(request.responseText) as UploadPayload; } catch { body = null; }
+			if (request.status >= 200 && request.status < 300 && body?.data?.id) { onProgress?.(100); resolve(body.data); return; }
+			reject(new Error(body?.error?.message || `上传失败 (HTTP ${request.status})`));
+		};
+		request.onerror = () => reject(new Error("上传失败，请检查网络后重试"));
+		request.onabort = () => reject(new Error("上传已取消"));
+		const form = new FormData();
+		form.append("file", file, file.name);
+		form.append("alt", "");
+		form.append("caption", "");
+		request.send(form);
+	});
 }

@@ -22,7 +22,6 @@
     "@tiptap/markdown": "3.31.4",
     "@tiptap/react": "3.31.4",
     "@tiptap/starter-kit": "3.31.4",
-    "@vercel/blob": "2.8.1",
     "hono": "4.13.13",
     "katex": "^0.18.7",
     "lowlight": "^3.3.0",

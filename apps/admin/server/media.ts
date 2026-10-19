@@ -2,21 +2,21 @@ import { createHash, randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { request as httpsRequest } from "node:https";
-import { get, head, put } from "@vercel/blob";
-import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
-import { authenticateRequest, requireAdmin } from "./auth.js";
+import { requireAdmin } from "./auth.js";
 import { getStore, getSiteId, collection, assertSite, type FileStore } from "./file-store.js";
-import { blobToken } from "./storage-config.js";
-export { blobToken } from "./storage-config.js";
 import { ApiFailure, readJson } from "./security.js";
 import type { AdminApp } from "./types.js";
 import { defaultMediaImportHosts } from "./runtime-config.js";
 import { uploadToImageBed } from "./image-host.js";
 
+/** External imports are downloaded by the server, so they may exceed the function request limit. */
 export const MAX_MEDIA_SIZE = 32 * 1024 * 1024;
+/** Direct browser uploads travel through the Vercel function body limit (~4.5 MiB). */
+export const MAX_UPLOAD_SIZE = 4 * 1024 * 1024;
+const MAX_UPLOAD_BODY = MAX_UPLOAD_SIZE + 256 * 1024;
+const MAX_NAME_LENGTH = 255;
 const EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/avif": "avif", "image/svg+xml": "svg", "image/x-icon": "ico", "image/vnd.microsoft.icon": "ico" };
-type Media = Record<string, unknown> & { id: string; pathname: string; name: string; contentType: string; size: number; ownerId: string; alt: string; caption: string; digest: string; createdAt: string; deleted?: boolean; publishedUrl?: string };
-type Intent = Record<string, unknown> & { id: string; owner_id: string; pathname: string; name: string; content_type: string; size: number; state: string; expires_at: string };
+type Media = Record<string, unknown> & { id: string; name: string; contentType: string; size: number; ownerId: string; alt: string; caption: string; digest: string; createdAt: string; publishedUrl?: string; pathname?: string; deleted?: boolean };
 
 export function safeMediaType(bytes: Uint8Array): string {
 	const b = Buffer.from(bytes);
@@ -37,21 +37,39 @@ export function safeMediaType(bytes: Uint8Array): string {
 	throw new ApiFailure(415, "UNSUPPORTED_MEDIA", "文件内容不是支持的图片或图标");
 }
 
+function publishedUrlOf(value: unknown): string | undefined {
+	if (typeof value !== "string" || !value.trim()) return undefined;
+	try {
+		const url = new URL(value);
+		if (url.protocol !== "https:" || url.username || url.password) return undefined;
+		return url.href;
+	} catch { return undefined; }
+}
+
 export function publicMedia(record: Media) {
-	return { id: record.id, pathname: record.pathname, name: record.name, contentType: record.contentType, size: record.size, access: "private", alt: record.alt, caption: record.caption, createdAt: record.createdAt, contentUrl: `/api/media/${record.id}/content`, ...(record.publishedUrl ? { publishedUrl: record.publishedUrl } : {}) };
+	const publishedUrl = publishedUrlOf(record.publishedUrl);
+	return { id: record.id, name: record.name, contentType: record.contentType, size: record.size, access: "public", alt: record.alt, caption: record.caption, createdAt: record.createdAt, url: publishedUrl, contentUrl: publishedUrl, publishedUrl };
 }
 async function mediaById(id: string): Promise<Media> {
 	const media = collection(await getStore().read(), "entities")[`media:${id}`]?.data as Media | undefined;
 	if (!media || media.deleted) throw new ApiFailure(404, "MEDIA_NOT_FOUND", "媒体不存在");
 	return media;
 }
-async function readStream(stream: ReadableStream<Uint8Array>, limit = MAX_MEDIA_SIZE): Promise<Buffer> {
-	const reader = stream.getReader(); const chunks: Uint8Array[] = []; let size = 0;
-	try { while (true) { const part = await reader.read(); if (part.done) break; size += part.value.byteLength; if (size > limit) { await reader.cancel(); throw new ApiFailure(413, "MEDIA_TOO_LARGE", "媒体超过大小限制"); } chunks.push(part.value); } } finally { reader.releaseLock(); }
-	return Buffer.concat(chunks);
-}
 async function persistMedia(media: Media): Promise<void> {
 	await getStore().update((state) => { const now = new Date().toISOString(); collection(state, "entities")[`media:${media.id}`] ||= { id: media.id, kind: "media", data: media, revision: 1, created_at: now, updated_at: now }; });
+}
+
+/**
+ * Uploads the bytes to the image host first and only records the media once a public URL exists,
+ * so a failed image-host call never leaves an unusable media row behind.
+ */
+async function saveImage(bytes: Buffer, contentType: string, ownerId: string, metadata: { name?: string; alt: string; caption: string }): Promise<Media> {
+	const id = randomUUID();
+	const name = metadata.name || `${id}.${EXTENSIONS[contentType]}`;
+	const publishedUrl = await uploadToImageBed(bytes, name, contentType);
+	const media: Media = { id, name, contentType, size: bytes.length, ownerId, alt: metadata.alt, caption: metadata.caption, digest: createHash("sha256").update(bytes).digest("hex"), createdAt: new Date().toISOString(), publishedUrl };
+	await persistMedia(media);
+	return media;
 }
 
 export function isPublicAddress(address: string): boolean {
@@ -111,59 +129,92 @@ export async function importBytes(raw: string, options: ImportOptions = {}): Pro
 	}
 }
 
-export type FrozenMedia = Record<string, unknown> & { id: string; pathname: string; digest: string; size: number; contentType: string; revision: number; publishedUrl?: string };
+/** Reads the bounded multipart body; the JSON reader cannot decode binary uploads. */
+async function readUploadBody(request: Request, limit: number, timeoutMs = 15_000): Promise<Buffer> {
+	if (!Number.isSafeInteger(limit) || limit < 1) throw new TypeError("Invalid media body limit");
+	const lengthHeader = request.headers.get("content-length");
+	let declared: number | undefined;
+	if (lengthHeader !== null) {
+		if (!/^\d+$/.test(lengthHeader) || !Number.isSafeInteger(Number(lengthHeader))) throw new ApiFailure(400, "CONTENT_LENGTH_INVALID", "请求长度不合法");
+		declared = Number(lengthHeader);
+		if (declared > limit) { void request.body?.cancel().catch(() => {}); throw new ApiFailure(413, "MEDIA_TOO_LARGE", "媒体超过 4 MiB 直接上传限制"); }
+	}
+	if (!request.body) throw new ApiFailure(400, "REQUEST_BODY_INVALID", "请求内容不合法");
+	const reader = request.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ApiFailure(408, "REQUEST_TIMEOUT", "读取请求超时")), timeoutMs); });
+	try {
+		while (true) {
+			const { done, value } = await Promise.race([reader.read(), timeout]);
+			if (done) break;
+			if (!(value instanceof Uint8Array)) throw new ApiFailure(400, "REQUEST_BODY_INVALID", "请求内容不合法");
+			size += value.byteLength;
+			if (size > limit) throw new ApiFailure(413, "MEDIA_TOO_LARGE", "媒体超过 4 MiB 直接上传限制");
+			chunks.push(value);
+		}
+		if (declared !== undefined && size !== declared) throw new ApiFailure(400, "CONTENT_LENGTH_INVALID", "请求长度与实际内容不一致");
+		return Buffer.concat(chunks);
+	} catch (error) {
+		void reader.cancel().catch(() => {});
+		if (error instanceof ApiFailure) throw error;
+		throw new ApiFailure(400, "REQUEST_BODY_INVALID", "请求内容无法读取");
+	} finally {
+		clearTimeout(timer);
+		reader.releaseLock();
+	}
+}
+
+function formText(value: FormDataEntryValue | null, limit: number): string {
+	if (value === null) return "";
+	if (typeof value !== "string" || value.length > limit) throw new ApiFailure(400, "INVALID_MEDIA_METADATA", "替代文本或图注过长");
+	return value;
+}
+
+function uploadedFilename(raw: string): string | undefined {
+	const name = raw.split(/[\\/]/).pop()!.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, MAX_NAME_LENGTH);
+	return name || undefined;
+}
+
+function assertDeclaredType(detected: string, declared: string): void {
+	if (!declared || detected === declared) return;
+	if (detected === "image/x-icon" && declared === "image/vnd.microsoft.icon") return;
+	throw new ApiFailure(415, "UPLOAD_CONTENT_MISMATCH", "文件实际内容与声明类型不符");
+}
+
+export type FrozenMedia = Record<string, unknown> & { id: string; digest: string; size: number; contentType: string; revision: number; pathname?: string; publishedUrl?: string };
 export type MediaPublicationOptions = {
 	store?: FileStore;
 	site?: string;
 	frozenMedia?: Record<string, FrozenMedia>;
-	blob?: { get: typeof get; head: typeof head; put: typeof put };
-	imageBed?: (bytes: Uint8Array, filename: string, contentType: string) => Promise<string>;
 };
 
+function validFrozenMedia(media: FrozenMedia | undefined, id: string): media is FrozenMedia {
+	return Boolean(media && media.id === id && Object.hasOwn(EXTENSIONS, media.contentType) && /^[a-f0-9]{64}$/.test(media.digest) && Number.isSafeInteger(media.size) && media.size >= 1 && media.size <= MAX_MEDIA_SIZE && Number.isSafeInteger(media.revision) && media.revision >= 1);
+}
+
+/** The image host URL is byte-stable per media id, so only digest/size/type identify the record. */
+function sameMediaBytes(media: Media | undefined, frozen: FrozenMedia): boolean {
+	return Boolean(media && !media.deleted && media.digest === frozen.digest && media.size === frozen.size && media.contentType === frozen.contentType);
+}
+
+/** Resolves image-host URLs for a frozen snapshot; never uploads and never reads legacy blob paths. */
 export async function publishMediaForSnapshot(ids: string[], _taskId: string, options: MediaPublicationOptions = {}): Promise<Record<string, string>> {
 	if (ids.length && !options.frozenMedia) throw new ApiFailure(409, "FROZEN_MEDIA_INVALID", "发布必须使用已冻结的媒体清单");
 	const store = options.store || getStore(); const site = options.site || getSiteId();
-	const storage = options.blob || { get, head, put };
-	const privateToken = blobToken("private");
-	const legacyPublicToken = options.blob ? blobToken("public") : undefined;
 	const urls: Record<string, string> = {};
 	for (const id of [...new Set(ids)]) {
-		const media = options.frozenMedia?.[id];
-		if (!media || media.id !== id || typeof media.pathname !== "string" || !media.pathname || !Object.hasOwn(EXTENSIONS, media.contentType) || !/^[a-f0-9]{64}$/.test(media.digest) || !Number.isSafeInteger(media.size) || media.size < 1 || media.size > MAX_MEDIA_SIZE || !Number.isSafeInteger(media.revision) || media.revision < 1) throw new ApiFailure(409, "FROZEN_MEDIA_INVALID", "冻结媒体记录不完整");
-		const source = await storage.get(media.pathname, { access: "private", token: privateToken, useCache: false });
-		if (!source || source.statusCode !== 200) throw new ApiFailure(409, "MEDIA_MISSING", "待发布媒体不可读取");
-		const bytes = await readStream(source.stream, media.size); const digest = createHash("sha256").update(bytes).digest("hex");
-		const detected = safeMediaType(bytes);
-		if (digest !== media.digest || bytes.length !== media.size || (detected !== media.contentType && !(detected === "image/x-icon" && media.contentType === "image/vnd.microsoft.icon"))) throw new ApiFailure(409, "MEDIA_CHANGED", "媒体内容与冻结记录不一致");
-
-		let url: string | undefined;
-		if (!options.blob) {
-			const currentState = await store.read(); assertSite(currentState, site);
-			const current = collection(currentState, "entities")["media:" + id]?.data as Media | undefined;
-			if (currentState.collections.entities && current && currentState.collections.entities["media:" + id]?.revision === media.revision && current.pathname === media.pathname && current.digest === media.digest && !current.deleted && typeof current.publishedUrl === "string") url = current.publishedUrl;
-			if (!url) url = await (options.imageBed || uploadToImageBed)(bytes, media.id + "." + EXTENSIONS[media.contentType], media.contentType);
-		} else {
-			const pathname = "published/" + createHash("sha256").update(site).digest("hex").slice(0,16) + "/" + id + "/" + digest + "." + EXTENSIONS[media.contentType];
-			const existing = async (): Promise<string | undefined> => {
-				let metadata: Awaited<ReturnType<typeof head>>;
-				try { metadata = await storage.head(pathname, { token: legacyPublicToken }); } catch (error) { if ((error as Error).constructor.name === "BlobNotFoundError") return; throw error; }
-				const result = await storage.get(pathname, { token: legacyPublicToken, access: "public", useCache: false });
-				if (!result || result.statusCode !== 200 || metadata.size !== media.size || metadata.contentType !== media.contentType) throw new ApiFailure(409, "PUBLISHED_MEDIA_CONFLICT", "已发布媒体校验不一致");
-				const published = await readStream(result.stream, media.size);
-				if (published.length !== media.size || createHash("sha256").update(published).digest("hex") !== digest) throw new ApiFailure(409, "PUBLISHED_MEDIA_CONFLICT", "已发布媒体校验不一致");
-				return metadata.url;
-			};
-			url = await existing();
-			if (!url) {
-				try { await storage.put(pathname, bytes, { access: "public", token: legacyPublicToken, addRandomSuffix: false, allowOverwrite: false, contentType: media.contentType, cacheControlMaxAge: 31536000 }); }
-				catch (error) { if (!(url = await existing())) throw error; }
-				url ||= await existing();
-				if (!url) throw new ApiFailure(409, "PUBLISHED_MEDIA_UNVERIFIED", "公开媒体尚未通过读取核验");
-			}
-		}
-		await store.update((state) => {
-			assertSite(state, site); const row = collection(state, "entities")["media:" + id]; const current = row?.data as Media | undefined;
-			if (row && current && row.revision === media.revision && current.pathname === media.pathname && current.digest === media.digest && !current.deleted) { current.publishedUrl = url; row.updated_at = new Date().toISOString(); }
+		const frozen = options.frozenMedia?.[id];
+		if (!validFrozenMedia(frozen, id)) throw new ApiFailure(409, "FROZEN_MEDIA_INVALID", "冻结媒体记录不完整");
+		const state = await store.read(); assertSite(state, site);
+		const row = collection(state, "entities")[`media:${id}`]; const current = row?.data as Media | undefined;
+		const matchesCurrent = sameMediaBytes(current, frozen);
+		const url = publishedUrlOf(frozen.publishedUrl) ?? (matchesCurrent ? publishedUrlOf(current!.publishedUrl) : undefined);
+		if (!url) throw new ApiFailure(409, "MEDIA_MIGRATION_REQUIRED", "媒体尚未迁移到图床，请先运行 Blob→KV/ImgBed 迁移");
+		if (matchesCurrent) await store.update((next) => {
+			assertSite(next, site);
+			const nextRow = collection(next, "entities")[`media:${id}`]; const nextMedia = nextRow?.data as Media | undefined;
+			if (!nextRow || !nextMedia || !sameMediaBytes(nextMedia, frozen) || nextMedia.publishedUrl === url) return;
+			nextMedia.publishedUrl = url; nextRow.updated_at = new Date().toISOString();
 		});
 		urls[id] = url;
 	}
@@ -175,59 +226,36 @@ export function registerMediaRoutes(app: AdminApp): void {
 		const rows = Object.values(collection(await getStore().read(), "entities")).filter((row) => row.kind === "media" && !(row.data as Media).deleted).sort((a,b) => String(b.created_at).localeCompare(String(a.created_at))) as Array<{ data: Media }>;
 		return c.json({ data: rows.map((row) => publicMedia(row.data)) });
 	});
-	app.post("/api/media/intents", requireAdmin, async (c) => {
-		blobToken("private"); const body = await readJson(c.req.raw); const name = String(body.name || ""); const contentType = String(body.contentType || ""); const size = Number(body.size);
-		if (!name || name.length > 255 || !Object.hasOwn(EXTENSIONS, contentType) || !Number.isSafeInteger(size) || size < 1 || size > MAX_MEDIA_SIZE) throw new ApiFailure(400, "INVALID_UPLOAD", "文件名、类型或大小不合法");
-		const id = randomUUID(); const pathname = `drafts/${createHash("sha256").update(getSiteId()).digest("hex").slice(0,16)}/${c.get("user").id}/${id}.${EXTENSIONS[contentType]}`;
-		await getStore().update((state) => { collection(state, "media_upload_intents")[id] = { id, owner_id: c.get("user").id, pathname, name, content_type: contentType, size, state: "pending", expires_at: new Date(Date.now()+30*60*1000).toISOString() }; });
-		return c.json({ data: { id, pathname } }, 201);
-	});
-	app.post("/api/media/upload", async (c) => {
-		const body = await readJson(c.req.raw, 65536);
-		if (!["blob.generate-client-token","blob.upload-completed"].includes(String(body.type))) throw new ApiFailure(400, "INVALID_UPLOAD_EVENT", "上传事件不合法");
-		const result = await handleUpload({ body: body as unknown as HandleUploadBody, request: c.req.raw, token: blobToken("private"),
-			onBeforeGenerateToken: async (pathname, payload) => {
-				let data: Record<string, unknown>; try { data = JSON.parse(payload || "{}"); } catch { throw new ApiFailure(400, "INVALID_UPLOAD_PAYLOAD", "上传参数无效"); }
-				const session = await authenticateRequest(c.req.raw, String(data.csrfToken || ""));
-				const intent = collection(await getStore().read(), "media_upload_intents")[String(data.intentId || "")] as Intent | undefined;
-				if (!intent || intent.owner_id !== session.user.id || intent.pathname !== pathname || intent.state !== "pending" || new Date(intent.expires_at).getTime() <= Date.now()) throw new ApiFailure(403, "UPLOAD_INTENT_DENIED", "上传许可失效或不属于当前用户");
-				return { allowedContentTypes: [intent.content_type], maximumSizeInBytes: Number(intent.size), validUntil: Date.now()+10*60*1000, addRandomSuffix: false, allowOverwrite: false, tokenPayload: JSON.stringify({ intentId: intent.id, ownerId: session.user.id, siteId: getSiteId() }), callbackUrl: `${new URL(c.req.raw.url).origin}/api/media/upload` };
-			},
-			onUploadCompleted: async ({ blob, tokenPayload }) => {
-				let payload: Record<string, unknown>; try { payload = JSON.parse(tokenPayload || "{}"); } catch { throw new ApiFailure(403, "UPLOAD_CALLBACK_DENIED", "上传回调无效"); }
-				if (payload.siteId !== getSiteId()) throw new ApiFailure(403, "UPLOAD_CALLBACK_DENIED", "上传回调不属于此站点");
-				const intent = collection(await getStore().read(), "media_upload_intents")[String(payload.intentId || "")] as Intent | undefined;
-				if (!intent || intent.owner_id !== payload.ownerId || intent.pathname !== blob.pathname) throw new ApiFailure(403, "UPLOAD_CALLBACK_DENIED", "上传归属或路径不一致");
-				if (intent.state === "complete") return;
-				if (intent.state !== "pending" || new Date(intent.expires_at).getTime() <= Date.now()) throw new ApiFailure(403, "UPLOAD_INTENT_EXPIRED", "上传许可已失效");
-				const metadata = await head(intent.pathname, { token: blobToken("private") });
-				if (metadata.pathname !== intent.pathname || metadata.url !== blob.url || metadata.size !== Number(intent.size) || metadata.contentType !== intent.content_type) throw new ApiFailure(415, "UPLOAD_METADATA_MISMATCH", "上传文件类型或大小与许可不一致");
-				const source = await get(intent.pathname, { access: "private", token: blobToken("private"), useCache: false });
-				if (!source || source.statusCode !== 200) throw new ApiFailure(409, "UPLOAD_NOT_FOUND", "上传内容尚不可读取");
-				const bytes = await readStream(source.stream, Number(intent.size)); const detected = safeMediaType(bytes);
-				if (bytes.length !== Number(intent.size) || (detected !== intent.content_type && !(detected === "image/x-icon" && intent.content_type === "image/vnd.microsoft.icon"))) throw new ApiFailure(415, "UPLOAD_CONTENT_MISMATCH", "文件实际内容与声明类型不符");
-				const media: Media = { id: intent.id, pathname: intent.pathname, name: intent.name, contentType: intent.content_type, size: bytes.length, ownerId: intent.owner_id, alt: "", caption: "", digest: createHash("sha256").update(bytes).digest("hex"), createdAt: new Date().toISOString() };
-				await getStore().update((state) => {
-					const current = collection(state, "media_upload_intents")[intent.id] as Intent | undefined;
-					if (!current || current.owner_id !== payload.ownerId || current.pathname !== blob.pathname) throw new ApiFailure(403, "UPLOAD_CALLBACK_DENIED", "上传归属或路径不一致");
-					if (current.state === "complete") return;
-					if (current.state !== "pending" || new Date(current.expires_at).getTime() <= Date.now()) throw new ApiFailure(403, "UPLOAD_INTENT_EXPIRED", "上传许可已失效");
-					const now = new Date().toISOString(); collection(state, "entities")[`media:${intent.id}`] ||= { id: intent.id, kind: "media", data: media, revision: 1, created_at: now, updated_at: now }; current.state = "complete";
-				});
-			},
-		}); return c.json(result);
+	app.post("/api/media/upload", requireAdmin, async (c) => {
+		const contentType = c.req.raw.headers.get("content-type") || "";
+		if (!/^multipart\/form-data\b/i.test(contentType) || !/;\s*boundary=/i.test(contentType)) throw new ApiFailure(415, "MULTIPART_REQUIRED", "上传请求必须使用 multipart/form-data");
+		const body = await readUploadBody(c.req.raw, MAX_UPLOAD_BODY);
+		let form: FormData;
+		try { form = await new Response(new Uint8Array(body), { headers: { "content-type": contentType } }).formData(); }
+		catch { throw new ApiFailure(400, "INVALID_MULTIPART", "上传表单格式无效"); }
+		const file = form.get("file");
+		if (file === null || typeof file === "string") throw new ApiFailure(400, "FILE_REQUIRED", "上传必须包含 file 文件字段");
+		if (file.size < 1) throw new ApiFailure(400, "INVALID_UPLOAD", "上传文件为空");
+		if (file.size > MAX_UPLOAD_SIZE) throw new ApiFailure(413, "MEDIA_TOO_LARGE", "媒体超过 4 MiB 直接上传限制");
+		const bytes = Buffer.from(await file.arrayBuffer());
+		if (bytes.length < 1 || bytes.length > MAX_UPLOAD_SIZE) throw new ApiFailure(413, "MEDIA_TOO_LARGE", "媒体超过 4 MiB 直接上传限制");
+		const detected = safeMediaType(bytes);
+		const declared = String(file.type || "").toLowerCase().trim();
+		if (declared && !Object.hasOwn(EXTENSIONS, declared)) throw new ApiFailure(415, "UNSUPPORTED_MEDIA", "文件内容不是支持的图片或图标");
+		assertDeclaredType(detected, declared);
+		const media = await saveImage(bytes, detected, c.get("user").id, { name: uploadedFilename(String(file.name || "")), alt: formText(form.get("alt"), 1000), caption: formText(form.get("caption"), 5000) });
+		return c.json({ data: publicMedia(media) }, 201);
 	});
 	app.get("/api/media/:id/content", requireAdmin, async (c) => {
-		const media = await mediaById(c.req.param("id")); const result = await get(media.pathname, { access: "private", token: blobToken("private") });
-		if (!result || result.statusCode !== 200) throw new ApiFailure(404, "MEDIA_NOT_FOUND", "媒体内容不存在");
-		return new Response(result.stream, { headers: { "Content-Type": media.contentType, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox", "Content-Disposition": "inline" } });
+		const media = await mediaById(c.req.param("id"));
+		const target = publishedUrlOf(media.publishedUrl);
+		if (!target) throw new ApiFailure(404, "MEDIA_NOT_FOUND", "媒体尚未迁移到图床");
+		return new Response(null, { status: 302, headers: { Location: target, "Cache-Control": "no-store" } });
 	});
 	app.post("/api/media/import", requireAdmin, async (c) => {
-		const token = blobToken("private"); const body = await readJson(c.req.raw, 65536); const bytes = await importBytes(String(body.url || "")); const contentType = safeMediaType(bytes); const id = randomUUID();
-		const pathname = `drafts/${createHash("sha256").update(getSiteId()).digest("hex").slice(0,16)}/${c.get("user").id}/${id}.${EXTENSIONS[contentType]}`;
-		await put(pathname, bytes, { token, access: "private", addRandomSuffix: false, allowOverwrite: false, contentType });
-		const media: Media = { id, pathname, name: `${id}.${EXTENSIONS[contentType]}`, contentType, size: bytes.length, ownerId: c.get("user").id, alt: String(body.alt || "").slice(0,1000), caption: String(body.caption || "").slice(0,5000), digest: createHash("sha256").update(bytes).digest("hex"), createdAt: new Date().toISOString() };
-		await persistMedia(media); return c.json({ data: publicMedia(media) }, 201);
+		const body = await readJson(c.req.raw, 65536); const bytes = await importBytes(String(body.url || "")); const contentType = safeMediaType(bytes);
+		const media = await saveImage(bytes, contentType, c.get("user").id, { alt: String(body.alt || "").slice(0,1000), caption: String(body.caption || "").slice(0,5000) });
+		return c.json({ data: publicMedia(media) }, 201);
 	});
 	app.patch("/api/media/:id", requireAdmin, async (c) => {
 		const media = await mediaById(c.req.param("id")); const body = await readJson(c.req.raw, 65536);
@@ -238,7 +266,7 @@ export function registerMediaRoutes(app: AdminApp): void {
 	});
 	app.delete("/api/media/:id", requireAdmin, async (c) => {
 		const media = await mediaById(c.req.param("id"));
-		// Tombstone only. Historical snapshots and immutable public versions retain their bytes.
+		// Tombstone only. The image host keeps serving the already published public copy.
 		await getStore().update((state) => { const row = collection(state, "entities")[`media:${media.id}`]; if (row) { row.data = { ...(row.data as Media), deleted: true }; row.revision = Number(row.revision)+1; row.updated_at = new Date().toISOString(); } }); return c.json({ data: { id: media.id, deleted: true } });
 	});
 }

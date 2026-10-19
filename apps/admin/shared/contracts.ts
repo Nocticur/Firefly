@@ -57,13 +57,17 @@ export type TaskRecord = {
 
 export type MediaRecord = {
 	id: string;
-	pathname: string;
 	name: string;
 	contentType: string;
 	size: number;
-	access: "private" | "public";
+	access: "public";
 	alt: string;
 	caption: string;
+	/** Image host URL recorded at upload/import time; absent on legacy Blob records until migration. */
+	publishedUrl?: string;
 	url?: string;
+	contentUrl?: string;
+	/** Legacy Blob drafts may still carry a pathname; it is ignored by the admin UI. */
+	pathname?: string;
 	createdAt: string;
 };

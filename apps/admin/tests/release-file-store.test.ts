@@ -111,13 +111,13 @@ test("flat-file release tasks preserve snapshots and reconcile concurrent or unc
 		});
 		await t.test("private media in posts and settings use the frozen record and leave draft bytes intact", async () => {
 			const site = newSite(); const mediaId = randomUUID(); const withMedia = source + `![image](media:${mediaId})\n`; const post = await seed(store, site, withMedia);
-			const media = { id: mediaId, pathname: `drafts/${mediaId}.png`, digest: sha256("original bytes"), size: 14, contentType: "image/png" };
+			const media = { id: mediaId, pathname: `drafts/${mediaId}.png`, digest: sha256("original bytes"), size: 14, contentType: "image/png", publishedUrl: "https://image.example/frozen.png" };
 			await store.update((state) => { collection(state, "entities")[`media:${mediaId}`] = { id: mediaId, kind: "media", data: media, revision: 1 }; });
 			await patchEntity(store, "settings:default", { avatar: `media:${mediaId}` });
 			const release = await freezeRelease(input(post.id), store, site);
 			await patchEntity(store, `media:${mediaId}`, { pathname: "changed-private-path.png", digest: "different" }, 2);
-			const publicUrl = "https://example.public.blob.vercel-storage.com/frozen.png";
-			assert.equal((await processReleaseTask(release.id, { store, site, github: github(), deployment: verified, skipCapabilityCheck: true, afterVerified: noNotification, prepareMedia: async (ids, _id, snapshot) => { assert.deepEqual(ids, [mediaId]); assert.equal(snapshot.media![mediaId].pathname, media.pathname); assert.equal(snapshot.media![mediaId].revision, 1); return { [mediaId]: publicUrl }; } })).state, "verified");
+			const publicUrl = "https://image.example/frozen.png";
+			assert.equal((await processReleaseTask(release.id, { store, site, github: github(), deployment: verified, skipCapabilityCheck: true, afterVerified: noNotification, prepareMedia: async (ids, _id, snapshot) => { assert.deepEqual(ids, [mediaId]); assert.equal(snapshot.media![mediaId].publishedUrl, media.publishedUrl); assert.equal(snapshot.media![mediaId].revision, 1); return { [mediaId]: publicUrl }; } })).state, "verified");
 			const current = await getPost(store, site, post.id); assert.equal(current.source, withMedia); assert.ok(current.publishedSource!.includes(publicUrl));
 			const recordRow = await record(store, "release_snapshots", release.snapshotId!);
 			assert.equal((recordRow.data as FrozenSnapshot).settings.settings && ((recordRow.data as FrozenSnapshot).settings.settings as Record<string, unknown>).avatar, publicUrl); assert.equal((recordRow.data as FrozenSnapshot).originalSettings!.settings && ((recordRow.data as FrozenSnapshot).originalSettings!.settings as Record<string, unknown>).avatar, `media:${mediaId}`);

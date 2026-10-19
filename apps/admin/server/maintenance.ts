@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { del, get, put } from "@vercel/blob";
 import { start } from "workflow/api";
 import { z } from "zod";
 import type { AdminApp } from "./types.js";
@@ -19,7 +18,8 @@ import {
 	productionEnvironment,
 	readJson,
 } from "./security.js";
-import { blobToken } from "./storage-config.js";
+import { kvConfig } from "./storage-config.js";
+import { createKvBackupProvider } from "./kv.js";
 import {
 	processReleaseTask,
 	reconcileVerifiedReleaseFinalization,
@@ -52,59 +52,27 @@ const hash = (value: Uint8Array | string) =>
 	createHash("sha256").update(value).digest("hex");
 const LEASE_MS = 600000;
 type Lease = { id: string; owner: string; fence: number };
-export interface BackupBlobProvider {
-	put(pathname: string, bytes: Buffer): Promise<void>;
-	get(pathname: string): Promise<Buffer | null>;
-	delete(pathname: string): Promise<void>;
+export interface BackupProvider {
+	put(key: string, bytes: Buffer): Promise<void>;
+	get(key: string): Promise<Buffer | null>;
+	delete(key: string): Promise<void>;
 }
-const privateBackupBlob: BackupBlobProvider = {
-	async put(pathname, bytes) {
-		await put(pathname, bytes, {
-			access: "private",
-			token: blobToken("private"),
-			contentType: "application/json",
-			addRandomSuffix: false,
-			allowOverwrite: false,
-		});
-	},
-	async get(pathname) {
-		const result = await get(pathname, {
-			access: "private",
-			token: blobToken("private"),
-			useCache: false,
-		});
-		if (result?.statusCode !== 200) return null;
-		if (result.blob.size > 32 * 1024 * 1024) {
-			void result.stream.cancel();
-			throw new Error("Backup exceeds size limit");
-		}
-		const reader = result.stream.getReader();
-		const chunks: Uint8Array[] = [];
-		let size = 0;
-		try {
-			while (true) {
-				const chunk = await reader.read();
-				if (chunk.done) break;
-				size += chunk.value.byteLength;
-				if (size > 32 * 1024 * 1024) {
-					void reader.cancel();
-					throw new Error("Backup exceeds size limit");
-				}
-				chunks.push(chunk.value);
-			}
-		} finally {
-			reader.releaseLock();
-		}
-		return Buffer.concat(chunks);
-	},
-	async delete(pathname) {
-		await del(pathname, { token: blobToken("private") });
-	},
-};
+export const MAX_BACKUP_BYTES = 8 * 1024 * 1024;
+function configuredBackupProvider(): BackupProvider {
+	const config = kvConfig();
+	if (!config)
+		throw new ApiFailure(
+			503,
+			"KV_CONFIGURATION_REQUIRED",
+			"缺少 KV 配置，无法读写后台备份",
+		);
+	return createKvBackupProvider(config);
+}
 export type MaintenanceDependencies = {
 	store?: FileStore;
 	site?: string;
-	blob?: BackupBlobProvider;
+	blob?: BackupProvider;
+	mediaFetcher?: typeof fetch;
 	skipCapabilityCheck?: boolean;
 	processPublish?: (id: string) => Promise<unknown>;
 	reconcileFinalization?: () => Promise<void>;
@@ -179,12 +147,12 @@ export async function createBackup(
 	store = getStore(),
 	site = getSiteId(),
 	options: {
-		blob?: BackupBlobProvider;
+		blob?: BackupProvider;
 		restoreOwner?: boolean;
 		expectedRevision?: number;
 	} = {},
 ): Promise<Row> {
-	const blob = options.blob || privateBackupBlob,
+	const blob = options.blob || configuredBackupProvider(),
 		owner = randomUUID(),
 		now = new Date().toISOString();
 	const claim = await store.update((state) => {
@@ -215,7 +183,7 @@ export async function createBackup(
 				? previous.payload
 				: JSON.stringify(capture(state, id, now));
 		const checksum = hash(payload),
-			pathname = `backups/${hash(site)}/${hash(id)}/${checksum}.json`;
+			pathname = `admin-backup:${hash(site)}:${hash(id)}:${checksum}`;
 		claims[id] = {
 			id,
 			owner_id: owner,
@@ -374,7 +342,8 @@ async function loadBackup(
 	id: string,
 	store: FileStore,
 	site: string,
-	blob: BackupBlobProvider,
+	blob: BackupProvider,
+	mediaFetcher: typeof fetch = fetch,
 ): Promise<Backup> {
 	const state = await store.read();
 	assertSite(state, site);
@@ -388,7 +357,7 @@ async function loadBackup(
 	const bytes = await blob.get(record.pathname);
 	if (
 		!bytes ||
-		bytes.length > 32 * 1024 * 1024 ||
+		bytes.length > MAX_BACKUP_BYTES ||
 		!constantTimeEqual(hash(bytes), record.sha256)
 	)
 		throw new Error("Backup checksum mismatch");
@@ -396,11 +365,27 @@ async function loadBackup(
 	validateBackup(backup, site);
 	if (backup.id !== id) throw new Error("Backup identity mismatch");
 	for (const media of backup.mediaManifest) {
-		if (typeof media.pathname !== "string" || typeof media.digest !== "string")
+		// Media bytes live in the image bed, not in this store. Verify that every
+		// frozen reference is still a reachable HTTPS image instead of re-hashing
+		// bytes this project no longer owns.
+		const url = media.publishedUrl;
+		if (typeof url !== "string" || !/^https:\/\//.test(url))
 			throw new Error("Media manifest incomplete");
-		const bytes = await blob.get(media.pathname);
-		if (!bytes || hash(bytes) !== media.digest)
-			throw new Error("Backup media integrity verification failed");
+		let response: Response;
+		try {
+			response = await mediaFetcher(url, {
+				method: "HEAD",
+				redirect: "error",
+				signal: AbortSignal.timeout(10_000),
+			});
+		} catch {
+			throw new Error("Backup media URL is unavailable");
+		}
+		if (!response.ok) {
+			await response.body?.cancel().catch(() => {});
+			throw new Error("Backup media URL is unavailable");
+		}
+		await response.body?.cancel().catch(() => {});
 	}
 	return backup;
 }
@@ -504,7 +489,7 @@ function isOlderThanRetention(value: unknown, cutoff: number): boolean {
 export async function cleanupExpiredData(
 	store: FileStore,
 	site: string,
-	blob: BackupBlobProvider = privateBackupBlob,
+	blob: BackupProvider = configuredBackupProvider(),
 	now = Date.now(),
 ): Promise<CleanupSummary> {
 	const cutoff = now - DATA_RETENTION_MS;
@@ -626,14 +611,20 @@ export async function restoreBackup(
 ): Promise<void> {
 	const store = dependencies.store || getStore(),
 		site = dependencies.site || getSiteId(),
-		blob = dependencies.blob || privateBackupBlob;
+		blob = dependencies.blob || configuredBackupProvider();
 	if (!dependencies.skipCapabilityCheck) await assertMaintenance(store, site);
 	const lease =
 		suppliedLease || (await claimMaintenanceTask(store, site, taskId));
 	if (!lease) throw busy();
 	try {
 		await heartbeat(store, site, lease);
-		const backup = await loadBackup(backupId, store, site, blob);
+		const backup = await loadBackup(
+			backupId,
+			store,
+			site,
+			blob,
+			dependencies.mediaFetcher ?? fetch,
+		);
 		const captured = await store.read();
 		owned(captured, site, lease);
 		safeToRestore(captured);

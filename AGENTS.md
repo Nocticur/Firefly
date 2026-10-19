@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Firefly is an Astro 7 site with Svelte islands and TypeScript configuration. Main source code lives in `src/`: routes in `src/pages`, layouts in `src/layouts`, reusable UI in `src/components`, styles in `src/styles`, content in `src/content`, helpers in `src/utils`, and Markdown/HTML plugins in `src/plugins`. Site configuration is split across `src/config` with matching type definitions in `src/types`; prefer imports from `@/config` when available. Static files served directly belong in `public`, source-managed images in `src/assets`, docs in `docs` and `Firefly-Docs`, and automation in `scripts`.
+Firefly is an Astro 7 site with Svelte islands and TypeScript configuration. Main source code lives in `src/`: routes in `src/pages`, layouts in `src/layouts`, reusable UI in `src/components`, styles in `src/styles`, content in `src/content`, helpers in `src/utils`, and Markdown/HTML plugins in `src/plugins`. Site configuration is split across `src/config` with matching type definitions in `src/types`; prefer imports from `@/config` when available. Static files served directly belong in `public`, source-managed images in `src/assets`, docs in `docs` and `docs/nocticur`, and automation in `scripts`.
 
 ## Build, Test, and Development Commands
 
@@ -31,4 +31,4 @@ Use Conventional Commits, matching the current history: `feat: ...`, `fix: ...`,
 
 ## Security & Configuration Tips
 
-Do not commit secrets, tokens, or service keys in config files. Keep deployment-specific settings in the target platform environment, and review generated files such as `dist`, `src/constants/lqips.json`, and `src/constants/icons.ts` before committing them.
+Do not commit secrets, tokens, or service keys in config files. Keep deployment-specific settings in the target platform environment, and review generated files such as `dist`, `src/constants/lqips.json`, and `src/constants/icons.ts` before committing them. The Astro blog and the `/admin/` + `/api/` backend deploy together to one Vercel project (`pnpm build:vercel`); formal content is committed to GitHub `master` by the GitHub App, while private admin state (drafts, history, sessions, rate limits, moderation, tasks, backup index) lives in Upstash Redis KV and images go to CloudFlare-ImgBed. There is no database and no Vercel Blob usage; see `docs/nocticur/environment-variables.md` for the variable list.

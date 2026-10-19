@@ -4,12 +4,11 @@ import { app } from "../server/index.js";
 import { openApiDocument } from "../server/openapi.js";
 
 test("every documented private API rejects anonymous and forged credentials before reading data", async (t) => {
-	const variables = ["APP_ENV", "VERCEL_ENV", "ADMIN_ENTRY_PASSWORD", "ADMIN_DEV_ORIGIN", "ADMIN_DEV_PRIVATE_BLOB_TOKEN"] as const;
+	const variables = ["APP_ENV", "VERCEL_ENV", "ADMIN_ENTRY_PASSWORD", "ADMIN_DEV_ORIGIN"] as const;
 	const previous = Object.fromEntries(variables.map((key) => [key, process.env[key]]));
 	process.env.APP_ENV = "development"; delete process.env.VERCEL_ENV;
 	process.env.ADMIN_ENTRY_PASSWORD = "testOnly42";
 	process.env.ADMIN_DEV_ORIGIN = "http://localhost:3000";
-	delete process.env.ADMIN_DEV_PRIVATE_BLOB_TOKEN;
 	let checked = 0;
 	try {
 		for (const [path, methods] of Object.entries(openApiDocument.paths)) for (const [method, operation] of Object.entries(methods)) {

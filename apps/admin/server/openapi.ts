@@ -35,13 +35,14 @@ for (const kind of ["settings", "navigation", "icons"]) {
 	route("get", `/api/${kind}`, "Settings", `Read ${kind}`);
 	route("put", `/api/${kind}`, "Settings", `Save private ${kind} revision`, false, { data: { type: "object" }, expectedRevision: revision }, ["data", "expectedRevision"]);
 }
-route("get", "/api/media", "Media", "List private media metadata");
-route("post", "/api/media/intents", "Media", "Create constrained authenticated browser upload", false, { name: string, contentType: string, size: { type: "integer", maximum: 33554432 } }, ["name", "contentType", "size"]);
-route("post", "/api/media/upload", "Media", "Blob SDK upload protocol; token requests authenticate, callbacks verify provider signature", true, { type: string, payload: { type: "object" } }, ["type", "payload"]);
-route("get", "/api/media/{id}/content", "Media", "Authenticated private media bytes");
-route("post", "/api/media/import", "Media", "Import direct HTTPS image from configured host allowlist", false, { url: string, alt: string, caption: string }, ["url"]);
+route("get", "/api/media", "Media", "List image host media metadata");
+route("post", "/api/media/upload", "Media", "Upload one image as multipart/form-data (file, alt, caption), at most 4 MiB, and store it on the image host");
+paths["/api/media/upload"]!.post.requestBody = { required: true, content: { "multipart/form-data": { schema: { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary" }, alt: string, caption: string } } } } };
+route("get", "/api/media/{id}/content", "Media", "Redirect (302) to the public image host URL");
+(paths["/api/media/{id}/content"]!.get.responses as Record<string, unknown>)["302"] = { description: "Redirect to the image host", headers: { location: { schema: { type: "string" } } } };
+route("post", "/api/media/import", "Media", "Download an allowlisted direct HTTPS image (max 32 MiB) and store it on the image host", false, { url: string, alt: string, caption: string }, ["url"]);
 route("patch", "/api/media/{id}", "Media", "Save alternative text and caption independently", false, { alt: string, caption: string });
-route("delete", "/api/media/{id}", "Media", "Tombstone private media; retain immutable historical versions");
+route("delete", "/api/media/{id}", "Media", "Tombstone media metadata; the image host copy stays public");
 route("get", "/api/public/comments", "Public interactions", "Read visible comments and deleted reply placeholders", true);
 route("post", "/api/public/comments", "Public interactions", "Post plain text after Turnstile, origin, ban and rate checks", true, { articleId: string, parentId: string, name: string, email: string, body: string, turnstileToken: string }, ["articleId", "name", "body", "turnstileToken"]);
 route("get", "/api/public/friends", "Public interactions", "Read last verified public friend snapshot", true);

@@ -4,7 +4,7 @@ import path from "node:path";
 import { chromium } from "playwright";
 
 const base = process.env.SITE_TEST_BASE_URL || "http://127.0.0.1:4321";
-const screenshots = path.resolve("docs/nocticur/screenshots");
+const screenshots = path.resolve("cache/verify-screenshots");
 await mkdir(screenshots, { recursive: true });
 const browser = await chromium.launch({
 	headless: true,

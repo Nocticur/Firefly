@@ -1,45 +1,76 @@
 # 博客与后台统一部署
 
-源码在同一个仓库，部署目标为现有 Vercel `firefly` 项目。根构建命令 `pnpm build:vercel` 生成一份 `.vercel/output`，包含静态博客、`/admin/`、`/api/` 和 Workflow。后台源码在 `apps/admin`，无需第二个托管项目。
+博客、`/admin/`、`/api/` 和 Workflow 部署在同一个 Vercel 项目 `firefly`。根构建命令保持 `pnpm build:vercel`，生成一份 `.vercel/output`；后台源码在 `apps/admin`，不需要第二个托管项目。正式内容由 GitHub App 提交到 GitHub `master`，后台私有状态存 Upstash Redis KV，图片存 CloudFlare-ImgBed。不使用 Vercel Blob，也不使用数据库。
 
-## 配置
+## 前置服务
 
-按 [环境变量说明](./environment-variables.md) 填写后台密码和 Private Blob token。无需数据库服务、连接串、建表、SQL 迁移或迁移命令。导入和发布时再填写 GitHub App 凭据及 Vercel token；需要公开媒体或互动时按需填写对应凭据。
+| 服务 | 用途 | 必需 |
+| --- | --- | --- |
+| Vercel 项目 `firefly` | 托管博客、后台、API 与 Workflow | 是 |
+| Upstash Redis（Marketplace 集成） | 后台私有状态与备份对象，REST 读写 | 生产必需 |
+| CloudFlare-ImgBed | 图片上传与外链导入 | 使用媒体库时必需 |
+| GitHub App | 读取基线、原子提交 `master`、更新检查 | 发布文章/设置时必需 |
+| Vercel Token | 发布后核验生产部署与清单 | 发布时必需 |
+| Turnstile | 公开评论与友链申请校验 | 开启公开互动时必需 |
 
-Private Blob 保存后台状态 JSON、私有媒体和备份，Public Blob 只保存显式发布的不可变媒体版本；两个 store 必须分开。生产与非生产 store、密码和服务凭据也必须隔离。首次写入自动创建状态文件；不能把 Vercel 的临时磁盘当持久文件存储。
+## 添加 Upstash Redis
 
-后台“服务设置”只有生产发布和生产维护，两项默认关闭。配置服务密钥后仍需管理员明确开启，发布及恢复还需分别执行操作。开关在私有状态文件中，不参与公开站点发布。
+1. 在 Vercel 项目内打开 **Storage / Marketplace Integrations**，选择 **Upstash Redis**，创建或关联一个免费数据库，连接到 `firefly` 项目的 **Production** 环境。
+2. 集成会注入 REST 凭据。项目环境变量中应有 `KV_REST_API_URL` 与 `KV_REST_API_TOKEN`；若 Marketplace 注入的是 `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`，程序也接受这两个别名。
+3. `KV_REST_API_TOKEN` 设为 Secret；生产只勾选 Production。不要添加任何数据库连接串（`DATABASE_URL`、`POSTGRES_*` 等）。
+4. Upstash 在这里只当 KV 使用，不是关系型数据库：没有表结构、SQL 或迁移命令。后台把整个状态文档压缩后写入 `admin-state:<sha256(siteId)>:meta|data`，备份对象写入 `admin-backup:...`。
 
-个人联系邮箱 `youjinmian@outlook.com` 及访客填写的联系邮箱保留。后台不再提供自建发信服务、自动邮件通知或邮件记录入口；博客的个人邮箱链接和第三方评论配置不受影响。
+开发/预览需要独立数据时，另建一个免费数据库，分别配置 `ADMIN_DEV_KV_REST_API_URL/TOKEN`、`ADMIN_PREVIEW_KV_REST_API_URL/TOKEN`。不配置时开发/预览使用内存存储，重启即清空；生产不会回退到内存，也不会与开发/预览共用同一个 KV。
 
-## 验证和部署
+## 配置 CloudFlare-ImgBed
+
+1. 部署好自己的 CloudFlare-ImgBed 实例，取得 API Token 和站点地址。
+2. 配置 `IMGBED_API_TOKEN`（Secret，仅 Production）与 `IMGBED_BASE_URL`（可选，默认 `https://image.nocticur.eu.cc`）。
+3. 后台调用 `POST <IMGBED_BASE_URL>/upload?returnFormat=full&autoRetry=false`，以 `Authorization: Bearer <IMGBED_API_TOKEN>` 上传，并保存返回的 HTTPS 图片地址。
+4. 图片由 ImgBed 直接提供；Vercel 函数请求体约 4.5 MiB，因此直接上传限制 4 MiB，更大的图片请用外链导入（最大 32 MiB）。
+
+## 配置 GitHub App 与 Vercel
+
+- GitHub App：安装到 `Nocticur/Firefly`，权限为 Contents read/write、Metadata read；配置 `GITHUB_APP_ID` 与完整 PEM 的 `GITHUB_APP_PRIVATE_KEY`（Secret）。`GITHUB_INSTALLATION_ID` 可选，不填时由目标仓库接口自动查询。
+- 生产核验：配置 `VERCEL_TOKEN`（Secret，选择当前项目团队作用域）、可选 `VERCEL_TEAM_ID`；项目编号读取系统变量 `VERCEL_PROJECT_ID`（也接受 `VERCEL_BLOG_PROJECT_ID`）。
+- 若生产域名启用了 Deployment Protection，配置可选 `VERCEL_AUTOMATION_BYPASS_SECRET`，供发布核验读取受保护清单。
+- Vercel 项目需开启 **Enable access to System Environment Variables**，否则读不到 `VERCEL_ENV`、`VERCEL_URL`、`VERCEL_PROJECT_PRODUCTION_URL`、`VERCEL_PROJECT_ID`、`VERCEL_GIT_COMMIT_SHA` 等。
+
+完整变量清单见 [环境变量说明](./environment-variables.md)。
+
+## Cron 与维护
+
+根 `vercel.json` 已声明每日 Cron：路径 `/api/maintenance/cron`，时间 `0 19 * * *`（UTC），即北京时间次日 03:00。启用时配置 `CRON_SECRET`（Secret，仅 Production），接口以 `Authorization: Bearer` 校验。维护开关默认关闭，需管理员在后台“服务设置”中开启；每日维护会清理超过 30 天的文章历史、已结束发布任务与备份对象，当前文章、未完成任务和待核验记录保留。
+
+## 首次部署
 
 1. 安装依赖：`pnpm install --frozen-lockfile`。
-2. 运行 `pnpm check`、`pnpm type-check`、`pnpm --filter @nocticur/admin type-check` 和 `pnpm --filter @nocticur/admin test`。测试不需要外部数据库。
-3. 运行 `pnpm build:vercel`，同时验证实际生成的 Node 函数、博客静态文件、管理资源和 API 认证。
-4. 通过现有 Vercel 项目部署，保持博客与后台同源。实际部署后再验证登录、刷新、注销、草稿重读、基线导入和媒体权限。
-5. 在服务配置完整后分别开启所需生产功能，核验 Git 提交 SHA、生产清单、代表文章、中文路径、RSS 与搜索，再记录平台部署结果。
+2. 本地校验：`pnpm check`、`pnpm type-check`、`pnpm test:site`、`pnpm --filter @nocticur/admin type-check`、`pnpm --filter @nocticur/admin test`。
+3. 执行一次 `pnpm build:vercel`，确认生成 `.vercel/output` 且包含博客静态文件、管理资源、API 与 Workflow。
+4. 在 Vercel 导入仓库，项目根目录构建命令保持 `pnpm build:vercel`，安装命令 `pnpm install --frozen-lockfile`；不要为 `apps/admin` 另建项目。
+5. 按上节添加 Upstash、ImgBed、GitHub App、Vercel Token 等变量；生产 Secret 只勾选 Production。
+6. 部署后先登录 `/admin/`，依次验证会话刷新、退出、草稿保存与重读、媒体上传、一次显式发布、生产核验与备份；确认无误后再开启生产发布与每日维护。
 
-本地构建通过只证明产物可生成；真实 Blob、GitHub App、Vercel 部署和 Turnstile 仍需用实际凭据联调。静态博客可以在没有后台凭据时正常构建。
+## 从 Vercel Blob 迁移
 
-## 备份与恢复
+迁移顺序如下，旧 Blob 数据在新版本验证通过前不要删除：
 
-备份是私有 JSON 内容和媒体校验清单；媒体原始对象仍需保留。恢复先校验版本、站点、内容和媒体摘要，再建立当前状态的保护备份，最后校验当前文件修订号并原子替换。恢复期间有并发变化时拒绝覆盖，等待管理员重试；不再要求隔离恢复数据库。
+1. **迁移脚本**：用生产凭据在本地运行 `pnpm exec tsx scripts/migrate-blob-to-kv.ts`（需要 `BLOB_PRIVATE_READ_WRITE_TOKEN`、`KV_REST_API_URL/TOKEN`、`IMGBED_API_TOKEN/BASE_URL`，并设置 `APP_ENV=production` 与 `GITHUB_REPOSITORY`）。脚本通过原始 HTTPS 读取旧 Blob 私有状态（不依赖 `@vercel/blob`），把旧草稿媒体上传到 ImgBed，再写入与运行时相同的 `admin-state:<sha256(siteId)>:meta|data`（`siteId` 为 `GITHUB_REPOSITORY:环境`，脚本会重算 SHA-256 并设置 `meta` 的 ETag），最后校验读回校验和；KV 已存在文档时拒绝覆盖。旧 Blob 备份对象不会被复制，仍有需要时先单独恢复或保留。迁移完成后删除该脚本与 BLOB token。
+2. **部署**：配置 `KV_REST_API_URL/TOKEN`（以及 ImgBed 变量），保留 `BLOB_PRIVATE_READ_WRITE_TOKEN` 作为迁移期临时变量，然后部署新版本。
+3. **验证**：登录后台，核对草稿、历史、会话、评论/友链审核、发布任务、备份索引与备份恢复；上传一张图片确认进入 ImgBed；创建并完成一次生产发布，检查 Git 提交、部署 SHA 与发布清单。
+4. **删 Blob token**：确认无读取回退后，从 Vercel 项目删除 `BLOB_PRIVATE_READ_WRITE_TOKEN`、`BLOB_PUBLIC_READ_WRITE_TOKEN` 及开发/预览 Blob token，并删除旧 Blob store 与 `scripts/migrate-blob-to-kv.ts`。迁移期外的任何时间都不要再新增 Blob 变量。
 
-新建备份使用 `schemaVersion: 3`，仅包含当前保留的后台数据与媒体清单，不收录旧邮件集合。恢复兼容 `schemaVersion: 2` 的旧备份，但忽略其中的邮件集合，不恢复或重放旧邮件。当前状态文件中的历史邮件数据原样保留，既有 Blob 备份对象的字节和校验和不重写；本次功能删除不等于清除历史数据。
+## 验证步骤
 
-恢复保留当前服务开关及维护索引，清除登录会话，阻止旧发布任务自动重放。已发生的外部 Git 提交和部署不能被文件恢复撤销，需先核查未知结果。生产核验完成后的友链上线状态更新继续保留，不依赖邮件服务。
+1. `pnpm build:vercel` 通过，产物含静态博客、`/admin/`、`/api/` 与 Workflow。
+2. 登录 `/admin/` 后获得服务端会话；错误密码被拒绝，写请求在缺少 CSRF 或跨源时失败。
+3. 生产环境缺少 `KV_REST_API_URL/TOKEN` 时后台明确报配置错误，而不是静默使用内存；开发/预览未配置时使用内存存储且重启清空。
+4. 保存草稿、刷新页面后仍可读取；并发保存返回冲突而不是覆盖。
+5. 上传图片成功并返回 ImgBed HTTPS 地址；超过 4 MiB 的直接上传和外链导入超过 32 MiB 时报 413。
+6. 发布任务提交到 Git `master`，Workflow 核验生产域名、Git SHA 与发布清单；失败或结果未知时可核查。
+7. Cron 仅在生产以正确的 Bearer 密钥执行；维护与发布开关默认关闭。
+8. 创建备份后在 KV 中可见 `admin-backup:...` 对象，恢复前会校验站点、版本与校验和。
 
-代码回滚通过新的 Git revert 提交和完整构建完成，不使用 force push 重写历史。Vercel 代码回滚不会自动回滚 Git 或 Blob 文件；回滚前核对状态文件版本兼容性。
+## 回滚
 
-## 维护
-
-Vercel 每日 Cron 入口为 `/api/maintenance/cron`，配置时间 `0 19 * * *`（UTC），即北京时间次日 03:00，需 `CRON_SECRET` Bearer 校验。维护默认关闭，同一天的定时任务保持幂等；后台文件、备份与任务独立保留。无须另装数据库或运行 SQL 作业。
-
-每日维护会在备份和发布核验完成后清理超过 30 天的后台历史：文章历史版本、已结束的发布任务和快照、备份文件及索引。当前文章、当前发布基线、未完成或结果待核验的任务不会清理；清理失败的备份对象会保留索引，等待下次维护重试。清理不删除 GitHub 中已发布的文章，也不自动删除媒体对象。
-
-## 友链检测
-
-GitHub Actions 每月 1、7、13、19、25 日北京时间 13:10 执行一次友链状态检测和主页截图。GitHub cron 使用 UTC（`10 5 1,7,13,19,25 * *`）；这是每 6 天的日历近似调度，月末间隔会随月份长度变化。可在 Actions 手动运行 `status_only`、`screenshots_only` 或 `both`，也可填写友链名称或 URL 关键词限定目标。
-
-用量与套餐见 [免费部署说明](./free-deployment.md)。此前有关独立后台、Neon、迁移和云工作区数据库的说明已被本页替代。
+代码回滚使用新的 Git revert 提交并重新完整构建，不使用 force push 重写历史。Vercel 回滚代码不会自动回滚 Git 提交、KV 状态或 ImgBed 图片；回滚前先核对状态版本兼容性，必要时用迁移期备份恢复。套餐与额度见 [免费部署说明](./free-deployment.md)。

@@ -20,7 +20,7 @@ export type FrozenSnapshot = {
 	files: RepositoryFile[]; deletions: string[]; settings: Record<string, unknown>; redirects: Redirect[];
 	entityRevisions: Array<{ kind: string; id: string; revision: number }>; friendIds: string[];
 	friendRevisions: Record<string, number>; selectedIds: string[];
-	media?: Record<string, Row & { id: string; pathname: string; digest: string; size: number; contentType: string; revision: number }>;
+	media?: Record<string, Row & { id: string; publishedUrl: string; pathname?: string; digest: string; size: number; contentType: string; revision: number }>;
 	originalSettings?: Record<string, unknown>;
 	deploymentConfig?: Record<string, unknown>;
 	repositoryFiles?: RepositoryFile[];
@@ -121,8 +121,8 @@ export async function freezeRelease(input: z.infer<typeof releaseInput>, store =
 		snapshot.media = {};
 		for (const mediaId of mediaIds) {
 			const mediaRow = mediaRows.find((row) => row.id === mediaId); const data = mediaRow?.data as Row | undefined;
-			if (!mediaRow || !data || data.deleted || typeof data.pathname !== "string" || typeof data.digest !== "string" || typeof data.contentType !== "string" || typeof data.size !== "number") throw new ApiFailure(409, "MEDIA_REFERENCE_INVALID", "发布快照中的私有媒体不存在或记录不完整", { id: mediaId });
-			snapshot.media[mediaId] = { ...data, id: mediaId, pathname: data.pathname, digest: data.digest, contentType: data.contentType, size: data.size, revision: Number(mediaRow.revision) };
+			if (!mediaRow || !data || data.deleted || typeof data.publishedUrl !== "string" || !/^https:\/\//.test(data.publishedUrl) || typeof data.digest !== "string" || typeof data.contentType !== "string" || typeof data.size !== "number") throw new ApiFailure(409, "MEDIA_REFERENCE_INVALID", "发布快照中的媒体不存在、尚未迁移到图床或记录不完整", { id: mediaId });
+			snapshot.media[mediaId] = { ...data, id: mediaId, publishedUrl: data.publishedUrl, digest: data.digest, contentType: data.contentType, size: data.size, revision: Number(mediaRow.revision) };
 		}
 		snapshot.originalSettings = structuredClone(settings);
 		for (const file of files) if (!(file.path === "vercel.json" || /^src\/(?:content\/posts\/[^\0]+\.mdx?|data\/(?:published-state|managed-settings|redirects)\.json)$/.test(file.path)) || file.path.split("/").includes("..")) throw new ApiFailure(400, "UNSAFE_REPOSITORY_PATH", "发布路径不在允许的内容目录");

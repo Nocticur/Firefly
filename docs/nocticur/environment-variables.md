@@ -1,56 +1,95 @@
-# 无数据库环境变量
+# 环境变量
 
-博客、`/admin/` 和 `/api/` 部署在同一个 Vercel `firefly` 项目。后台不需要数据库连接、建表或迁移。
+博客、`/admin/` 和 `/api/` 部署在同一个 Vercel `firefly` 项目。后台私有状态存 Upstash Redis KV，图片走 CloudFlare-ImgBed；不需要数据库连接、建表或 SQL 迁移，也不使用 Vercel Blob。
 
-## 基础后台：4 项
+变量在 Vercel 项目 **Settings → Environment Variables** 中配置。生产 Secret 只勾选 **Production**；Vercel 需开启 **Enable access to System Environment Variables**，否则读不到平台注入的地址与项目编号。
+
+## 生产基础必填
 
 | 变量 | 填什么 | 用途 |
 | --- | --- | --- |
-| `ADMIN_ENTRY_PASSWORD` | 自己设置的 3～10 个字符密码，建议 10 位随机字符 | 后台登录；程序自动计算加盐哈希 |
-| `BLOB_PRIVATE_READ_WRITE_TOKEN` | Vercel **Private Blob store** 的 Read/Write token | 保存私有 JSON 状态、草稿、历史、登录会话、限流、审核记录与备份；只用于私有后台数据 |
-| `IMGBED_API_TOKEN` | CloudFlare-ImgBed API Token | 发布后台上传的图片到 `https://image.nocticur.eu.cc`；仅服务端使用 |
-| `IMGBED_BASE_URL` | 可选，默认为 `https://image.nocticur.eu.cc` | 你的 CloudFlare-ImgBed 地址；只有图床地址改变时才需要填写 |
+| `ADMIN_ENTRY_PASSWORD` | 自己设置的 3～10 个字符密码，建议 10 位随机字符；设为 **Secret** | 后台登录；服务端自动加盐 scrypt 哈希后核对 |
+| `KV_REST_API_URL` | Upstash Redis 的 REST 地址（Vercel Marketplace 集成通常自动注入；也接受 `UPSTASH_REDIS_REST_URL`） | 保存私有状态与备份 |
+| `KV_REST_API_TOKEN` | Upstash REST token；设为 **Secret**（也接受 `UPSTASH_REDIS_REST_TOKEN`） | 同上，写请求鉴权 |
+| `IMGBED_API_TOKEN` | CloudFlare-ImgBed API Token；使用媒体库时必填，设为 **Secret** | 服务端上传图片到图床 |
+| `IMGBED_BASE_URL` | 可选，默认 `https://image.nocticur.eu.cc` | 图床地址；只有地址改变时才填 |
 
-密码、Private Blob token 和 ImgBed API token 设为 Secret，仅勾选 Production；`IMGBED_BASE_URL` 是普通配置。首次使用时程序自动创建当前站点的状态文件，不需先初始化数据库。已有静态文章和图片照常从 GitHub 构建；不启用后台时无需这些凭据。
+生产缺少 `KV_REST_API_URL/TOKEN` 时后台明确报配置错误并拒绝保存，不会回退到内存或临时磁盘。首次写入自动创建 `admin-state:<sha256(siteId)>:meta` 与 `:data`，无需初始化。
 
-## 按功能添加
+## 发布与仓库
 
-| 功能 | 变量 | 说明 |
+| 变量 | 必填 | 说明 |
 | --- | --- | --- |
-| 从仓库导入、核查和发布 | `GITHUB_APP_ID`、`GITHUB_APP_PRIVATE_KEY` | GitHub App 只安装到 `Nocticur/Firefly`；Contents read/write，Metadata read；填写完整 PEM 私钥 |
-| 核验生产发布 | `VERCEL_TOKEN` | 选择当前项目团队作用域，程序读取实际生产部署结果 |
-| 接收友链申请或本站评论 | `PUBLIC_TURNSTILE_SITE_KEY`、`TURNSTILE_SECRET_KEY` | 同一个 Turnstile 小组件的公钥和私钥，允许博客域名 |
-| Vercel 每日维护 Cron | `CRON_SECRET` | 已配置 Cron 的必需生产 Secret；使用独立随机值，接口以 Bearer 校验。维护业务开关仍默认关闭；每日维护同时执行 30 天历史清理 |
+| `GITHUB_APP_ID` | 发布/导入时 | GitHub App 编号，只安装到 `Nocticur/Firefly` |
+| `GITHUB_APP_PRIVATE_KEY` | 发布/导入时 | App 私钥完整 PEM；设为 **Secret**；换行可写成 `\n` |
+| `GITHUB_INSTALLATION_ID` | 可选 | 不填时由目标仓库接口自动查询 |
+| `VERCEL_TOKEN` | 生产发布核验时必填 | Vercel Token，选择当前项目团队作用域；设为 **Secret** |
+| `VERCEL_PROJECT_ID` | 可选 | Vercel 自动提供；也接受 `VERCEL_BLOG_PROJECT_ID` |
+| `VERCEL_TEAM_ID` | 可选 | 团队作用域标识，仅有团队项目时需要 |
+| `VERCEL_AUTOMATION_BYPASS_SECRET` | 可选 | 生产域名启用 Deployment Protection 时，发布核验用它读取受保护清单 |
 
-除 App ID 和 Turnstile Site key 外均设为 Secret。服务密钥不能填写到公开 JSON、文章、后台表单或 Git。后台只保存服务的开启状态，不接收服务密钥。
+App 权限：Contents read/write、Metadata read。服务密钥不能填写到公开 JSON、文章、后台表单或 Git；后台只保存服务开关状态，不接收密钥。
 
-## 已自动完成
+## 互动
 
-- 环境读取 `VERCEL_ENV`，本地默认 development。
-- 仓库和发布分支沿用 `Nocticur/Firefly` 的 `master`。
-- 生产地址读取 Vercel 项目的 `VERCEL_PROJECT_PRODUCTION_URL`，回退到当前部署的 `VERCEL_URL`；没有平台值时才回退到已发布站点地址。管理界面和公开交互因此跟随当前 Vercel 项目，不需要手填 `ADMIN_ORIGIN` 或 `PUBLIC_SITE_ORIGIN`。
-- 预览 origin 读取平台 `VERCEL_URL`，继续精确校验来源。
-- GitHub App 安装编号由目标仓库接口查询。
-- Vercel 项目编号读取系统 `VERCEL_PROJECT_ID`。
-- 图片导入白名单默认使用博客域名和已发布图片实际使用的 HTTPS 主机。后台发布图片使用 CloudFlare-ImgBed，不再使用 Public Blob。
-- 语言、页面和主题沿用仓库现有设置。
+| 变量 | 必填 | 说明 |
+| --- | --- | --- |
+| `PUBLIC_TURNSTILE_SITE_KEY` | 开启评论/友链申请时 | Turnstile 小组件公钥，构建时注入前端；普通变量 |
+| `TURNSTILE_SECRET_KEY` | 开启评论/友链申请时 | 对应私钥；设为 **Secret** |
+| `INTERACTION_HASH_SECRET` | 可选 | 互动数据哈希密钥；不填默认复用 `TURNSTILE_SECRET_KEY` |
+| `ENABLE_PUBLIC_COMMENTS` | 可选 | `true`/`false`；不填时跟随站点评论配置（当前为 Nocticur 评论） |
+| `MEDIA_IMPORT_HOSTS` | 可选 | 外链导入允许的域名，逗号分隔；不填时用博客域名与已发布图片主机 |
 
-Vercel 需开启 **Enable access to System Environment Variables**。通常不必添加 APP_ENV、各类 origin、GitHub installation ID、Vercel project ID 等高级覆盖变量。`ADMIN_ORIGIN`、`PUBLIC_SITE_ORIGIN`、所有数据库连接变量和 `BLOB_PUBLIC_READ_WRITE_TOKEN` 已不再使用，应从 Vercel 项目环境变量中删除。
+公开写入还要求正确站点源、Turnstile 校验和限流；访客邮箱只用于人工联系，不公开展示。
 
-## 服务开关和隔离
+## 维护
 
-登录 `/admin/` 的“服务设置”，按需开启生产发布和生产维护。两项默认关闭；保存后立即生效，填入密钥不会自动开启服务。写入继续校验管理员、同源 Origin、CSRF 和修订号。Preview/Development 永远不能开启生产操作。
+| 变量 | 必填 | 说明 |
+| --- | --- | --- |
+| `CRON_SECRET` | 启用每日维护时必填 | 独立随机值；设为 **Secret**；Cron 接口以 `Authorization: Bearer` 校验 |
 
-开发使用 `ADMIN_DEV_PRIVATE_BLOB_TOKEN`，预览使用 `ADMIN_PREVIEW_PRIVATE_BLOB_TOKEN`，各自对应独立 Private store；公开图片统一发布到 ImgBed，不再添加开发或预览 Public Blob token。非生产不会回退到生产存储，且拒绝复用同一 store。每个环境还需自己的后台密码和所用第三方服务的隔离凭据。
+根 `vercel.json` 的 Cron 为 `/api/maintenance/cron`，时间 `0 19 * * *`（UTC，北京时间次日 03:00）。维护业务开关默认关闭，需在后台“服务设置”中显式开启；每日维护同时执行 30 天历史清理。
 
-## 个人邮箱与访客联系方式
+## 开发与预览可选
 
-个人联系邮箱为 `youjinmian@outlook.com`，通过博客中的邮箱链接联系，无需发信服务环境变量。评论和友链申请中的访客邮箱字段继续保留，用于必要时人工联系，不会公开展示；后台不自动发送回复、审核或上线邮件。第三方评论系统继续使用原有配置。
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `ADMIN_DEV_ORIGIN` | `http://localhost:3000` | 开发时管理 API 允许的源；用 Vite 5173 发起有会话写请求时改为 `http://localhost:5173` |
+| `PUBLIC_DEV_ORIGIN` | `http://localhost:4321` | 开发时博客源 |
+| `ADMIN_PREVIEW_ORIGIN` | 平台 `VERCEL_URL` | 预览环境管理源覆盖 |
+| `PUBLIC_PREVIEW_ORIGIN` | 平台 `VERCEL_URL` | 预览环境博客源覆盖 |
+| `ADMIN_DEV_KV_REST_API_URL` / `ADMIN_DEV_KV_REST_API_TOKEN` | 不填用内存存储 | 开发环境独立 KV |
+| `ADMIN_PREVIEW_KV_REST_API_URL` / `ADMIN_PREVIEW_KV_REST_API_TOKEN` | 不填用内存存储 | 预览环境独立 KV |
 
-## 文件如何保存
+开发/预览未配置独立 KV 时使用内存存储，重启清空；两者都必须与生产 KV 不同，否则后台拒绝启动。每个非生产环境还需自己的后台密码与第三方服务凭据。本地默认 `development`，不需要 `APP_ENV`。
 
-后台状态保存在 private store 的 `admin-state/<站点摘要>/state.json`；不能直接公开访问。读操作绕过缓存，写操作校验 ETag，避免并发覆盖。状态文件最大 16 MiB；媒体字节、发布后的不可变图片和备份文件独立存放。每日维护自动清理超过 30 天的历史、已结束发布记录和备份对象；当前状态、未完成任务和恢复待核验记录保留。存储不可用或文件损坏时停止写入，不回退临时磁盘或内存。
+## Vercel 自动提供，不要手填
 
-已经彻底移除数据库驱动、SQL、迁移脚本和 CI 数据库服务。不要再添加任何数据库连接变量或执行旧迁移命令。旧文档和验收回执仅保留为历史记录，以本页为当前清单。
+以下由平台注入，通常只在本地调试时手动导出：
 
-配置和代码修改需要重新部署才会在线上生效；完整统一构建命令为 `pnpm build:vercel`。本次不购买服务、不升级套餐，不以本地验证代替真实平台联调。
+`VERCEL_ENV`、`VERCEL_URL`、`VERCEL_PROJECT_PRODUCTION_URL`、`VERCEL_PROJECT_ID`、`VERCEL_GIT_COMMIT_SHA`、`VERCEL`。
+
+`GITHUB_REPOSITORY` 默认 `Nocticur/Firefly`，只有改仓库名时才需要填写；它也参与 `siteId`，改动会指向新的 KV key。
+
+## 必须删除的旧变量
+
+- `BLOB_PRIVATE_READ_WRITE_TOKEN`、`BLOB_PUBLIC_READ_WRITE_TOKEN`
+- `ADMIN_DEV_PRIVATE_BLOB_TOKEN`、`ADMIN_PREVIEW_PRIVATE_BLOB_TOKEN`
+- `ADMIN_ORIGIN`、`PUBLIC_SITE_ORIGIN`（已改为读取 Vercel 项目地址）
+- 所有数据库变量（`DATABASE_URL`、`POSTGRES_*`、Neon 连接串等）
+
+从 Blob 迁移期间可临时保留 `BLOB_PRIVATE_READ_WRITE_TOKEN`，用生产凭据在本地运行 `pnpm exec tsx scripts/migrate-blob-to-kv.ts`（脚本通过原始 HTTPS 读取 Blob，不依赖 `@vercel/blob`）；迁移完成并验证后删除该脚本与 `BLOB_PRIVATE_READ_WRITE_TOKEN`。不要再新增任何 Blob 或数据库变量。
+
+## Upstash 的定位
+
+Upstash 在这里只当 KV 使用，**不是关系型数据库**：没有表、索引、SQL、连接池或迁移命令。后台把整个状态文档压缩后写入两个 key，并用 Redis 脚本按 ETag 原子交换，避免并发覆盖。备份是 `admin-backup:<sha256(siteId)>:<sha256(backupId)>:<checksum>` 的不可变对象。状态文档解码后上限 16 MiB、编码后上限 8 MiB，单个备份上限 8 MiB；达到上限会返回 `507` 并拒绝写入，应清理历史而不是升级套餐。
+
+## 服务开关与隔离
+
+登录 `/admin/` 的“服务设置”，按需开启生产发布和生产维护，两项默认关闭；保存后立即生效。写入继续校验管理员会话、同源 Origin、CSRF 和修订号。Preview/Development 永远不能开启生产操作，也不会读取生产 KV。
+
+## 个人邮箱
+
+个人联系邮箱 `youjinmian@outlook.com` 通过博客邮箱链接联系，无需发信服务变量。评论和友链申请中的访客邮箱用于必要时人工联系，不公开展示；后台不自动发送回复、审核或上线邮件。
+
+配置和代码修改需要重新部署才会在线上生效；完整统一构建命令为 `pnpm build:vercel`。部署步骤见 [统一部署](./deployment.md)，额度见 [免费部署说明](./free-deployment.md)。
