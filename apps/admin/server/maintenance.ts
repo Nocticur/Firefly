@@ -19,7 +19,6 @@ import {
 	readJson,
 } from "./security.js";
 import { storageConfig } from "./storage-config.js";
-import { createKvBackupProvider } from "./kv.js";
 import { createCloudflareKvBackupProvider } from "./cloudflare-kv.js";
 import {
 	processReleaseTask,
@@ -67,14 +66,12 @@ function configuredBackupProvider(): BackupProvider {
 			"KV_CONFIGURATION_REQUIRED",
 			"缺少 KV 配置，无法读写后台备份",
 		);
-	return config.provider === "cloudflare"
-		? createCloudflareKvBackupProvider(config)
-		: createKvBackupProvider(config);
+	return createCloudflareKvBackupProvider(config);
 }
 export type MaintenanceDependencies = {
 	store?: FileStore;
 	site?: string;
-	blob?: BackupProvider;
+	backupProvider?: BackupProvider;
 	mediaFetcher?: typeof fetch;
 	skipCapabilityCheck?: boolean;
 	processPublish?: (id: string) => Promise<unknown>;
@@ -150,12 +147,12 @@ export async function createBackup(
 	store = getStore(),
 	site = getSiteId(),
 	options: {
-		blob?: BackupProvider;
+		backupProvider?: BackupProvider;
 		restoreOwner?: boolean;
 		expectedRevision?: number;
 	} = {},
 ): Promise<Row> {
-	const blob = options.blob || configuredBackupProvider(),
+	const backupProvider = options.backupProvider || configuredBackupProvider(),
 		owner = randomUUID(),
 		now = new Date().toISOString();
 	const claim = await store.update((state) => {
@@ -214,17 +211,17 @@ export async function createBackup(
 	const { payload, checksum, pathname, fence } = claim;
 	const bytes = Buffer.from(payload!);
 	try {
-		const existing = await blob.get(pathname!);
+		const existing = await backupProvider.get(pathname!);
 		if (existing && hash(existing) !== checksum)
 			throw new Error("Immutable backup contains different bytes");
 		if (!existing)
 			try {
-				await blob.put(pathname!, bytes);
+				await backupProvider.put(pathname!, bytes);
 			} catch (error) {
-				const recovered = await blob.get(pathname!);
+				const recovered = await backupProvider.get(pathname!);
 				if (!recovered || hash(recovered) !== checksum) throw error;
 			}
-		const verified = await blob.get(pathname!);
+		const verified = await backupProvider.get(pathname!);
 		if (!verified || hash(verified) !== checksum)
 			throw new Error("Private backup checksum verification failed");
 		const backup = JSON.parse(payload!) as Backup;
@@ -345,7 +342,7 @@ async function loadBackup(
 	id: string,
 	store: FileStore,
 	site: string,
-	blob: BackupProvider,
+	backupProvider: BackupProvider,
 	mediaFetcher: typeof fetch = fetch,
 ): Promise<Backup> {
 	const state = await store.read();
@@ -357,7 +354,7 @@ async function loadBackup(
 		typeof record.sha256 !== "string"
 	)
 		throw new ApiFailure(404, "BACKUP_NOT_FOUND", "找不到已验证的私有备份");
-	const bytes = await blob.get(record.pathname);
+	const bytes = await backupProvider.get(record.pathname);
 	if (
 		!bytes ||
 		bytes.length > MAX_BACKUP_BYTES ||
@@ -492,7 +489,7 @@ function isOlderThanRetention(value: unknown, cutoff: number): boolean {
 export async function cleanupExpiredData(
 	store: FileStore,
 	site: string,
-	blob: BackupProvider = configuredBackupProvider(),
+	backupProvider: BackupProvider = configuredBackupProvider(),
 	now = Date.now(),
 ): Promise<CleanupSummary> {
 	const cutoff = now - DATA_RETENTION_MS;
@@ -517,7 +514,7 @@ export async function cleanupExpiredData(
 	const deletedBackups = new Set<string>();
 	for (const backup of backupCandidates) {
 		try {
-			await blob.delete(String(backup.pathname));
+			await backupProvider.delete(String(backup.pathname));
 			deletedBackups.add(String(backup.id));
 		} catch {
 			// Keep the index if the immutable object could not be deleted.
@@ -614,7 +611,7 @@ export async function restoreBackup(
 ): Promise<void> {
 	const store = dependencies.store || getStore(),
 		site = dependencies.site || getSiteId(),
-		blob = dependencies.blob || configuredBackupProvider();
+		backupProvider = dependencies.backupProvider || configuredBackupProvider();
 	if (!dependencies.skipCapabilityCheck) await assertMaintenance(store, site);
 	const lease =
 		suppliedLease || (await claimMaintenanceTask(store, site, taskId));
@@ -625,7 +622,7 @@ export async function restoreBackup(
 			backupId,
 			store,
 			site,
-			blob,
+			backupProvider,
 			dependencies.mediaFetcher ?? fetch,
 		);
 		const captured = await store.read();
@@ -635,7 +632,7 @@ export async function restoreBackup(
 			`before-restore-${taskId}-${captured.revision}`,
 			store,
 			site,
-			{ blob, restoreOwner: true, expectedRevision: captured.revision },
+			{ backupProvider, restoreOwner: true, expectedRevision: captured.revision },
 		);
 		await store.update((state) => {
 			owned(state, site, lease);
@@ -775,7 +772,7 @@ export async function processMaintenanceTask(
 	try {
 		await heartbeat(store, site, lease);
 		if (task.kind === "backup")
-			await createBackup(id, store, site, { blob: dependencies.blob });
+			await createBackup(id, store, site, { backupProvider: dependencies.backupProvider });
 		if (task.kind === "restore")
 			await restoreBackup(
 				String((task.details as Row).backupId),
@@ -786,7 +783,7 @@ export async function processMaintenanceTask(
 		if (task.kind === "daily") {
 			const failures: unknown[] = [];
 			try {
-				await createBackup(id, store, site, { blob: dependencies.blob });
+				await createBackup(id, store, site, { backupProvider: dependencies.backupProvider });
 			} catch (error) {
 				failures.push(error);
 			}

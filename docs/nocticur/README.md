@@ -1,6 +1,6 @@
 # Nocticur 的 Firefly 博客与管理后台
 
-博客、`/admin/` 与 `/api/` 仍部署在同一个 Vercel 项目（`firefly`），根构建命令保持 `pnpm build:vercel`。正式文章、设置、导航和图标由后台通过 GitHub App 提交到 GitHub `master`；后台私有状态存 Upstash Redis KV 或 Cloudflare KV（二选一），图片上传和外链导入走 CloudFlare-ImgBed。当前不再使用 Vercel Blob，也不使用任何数据库。
+博客、`/admin/` 与 `/api/` 仍部署在同一个 Vercel 项目（`firefly`），根构建命令保持 `pnpm build:vercel`。正式文章、设置、导航和图标由后台通过 GitHub App 提交到 GitHub `master`；后台私有状态与备份存 Cloudflare KV（REST API），图片上传和外链导入走 CloudFlare-ImgBed。当前不再使用 Vercel Blob、Upstash Redis，也不使用任何数据库。
 
 当前配置以 [环境变量填写清单](./environment-variables.md) 和 [统一部署说明](./deployment.md) 为准；服务额度见 [免费部署说明](./free-deployment.md)。
 
@@ -11,12 +11,12 @@
 | 博客 | Vercel 项目 `firefly` | Astro 静态站点，`https://blog.mourn.top/`；与后台同源构建，无需第二个项目 |
 | 管理界面、API、Workflow | 同一 Vercel 项目 | 入口 `/admin/` 与 `/api/`，Hono API 与 Vercel Workflow 部署在同一份 `.vercel/output` |
 | 正式内容 | GitHub `master` | 文章、公开设置、导航、图标由 GitHub App 原子提交；Git 提交是公开内容的唯一来源 |
-| 后台私有状态 | Upstash Redis KV 或 Cloudflare KV | 草稿、历史、登录会话、限流、评论/友链审核、发布任务、维护任务与备份索引；Upstash 强一致，Cloudflare 最终一致 |
+| 后台私有状态 | Cloudflare KV | 草稿、历史、登录会话、限流、评论/友链审核、发布任务、维护任务与备份索引；最终一致，无原子 CAS |
 | 图片与图标资源 | CloudFlare-ImgBed | 上传与外链导入都由服务端调用图床；`IMGBED_API_TOKEN` / `IMGBED_BASE_URL` |
 | 备份对象 | 与状态同一 KV | 不可变对象存 `admin-backup:<sha256(siteId)>:<sha256(backupId)>:<checksum>` |
 | 登录 | 服务端密码 + 服务端会话 | 只验证 `ADMIN_ENTRY_PASSWORD`，不做 JWT 重写 |
 
-KV 状态按站点与环境隔离：`siteId` 为 `GITHUB_REPOSITORY`（默认 `Nocticur/Firefly`）加运行环境，状态 key 为 `admin-state:<sha256(siteId)>:data`。Upstash 还使用 `:meta` 保存 ETag，写入用 Redis 脚本做原子比较后交换；Cloudflare KV 没有原子 CAS，只能读后写并在写入前比较内容摘要，并发时可能后写覆盖且跨区域可能短暂读到旧值。生产未配置 KV 时后台拒绝启动写入；开发/预览未配置独立 KV 时使用内存存储，重启后清空，且不能与生产共用同一 KV。
+KV 状态按站点与环境隔离：`siteId` 为 `GITHUB_REPOSITORY`（默认 `Nocticur/Firefly`）加运行环境，状态 key 为 `admin-state:<sha256(siteId)>:data`。Cloudflare KV 没有原子 CAS，只能读后写并在写入前比较内容摘要与修订号，并发时可能后写覆盖且跨区域可能短暂读到旧值，冲突时返回 `409` 提示刷新后重新编辑。生产未配置 Cloudflare KV 时后台拒绝启动写入；开发/预览未配置独立 KV 时使用内存存储，重启后清空，且不能与生产共用同一命名空间。
 
 ## 登录方式
 

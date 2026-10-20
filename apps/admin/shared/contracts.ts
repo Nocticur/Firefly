@@ -63,11 +63,11 @@ export type MediaRecord = {
 	access: "public";
 	alt: string;
 	caption: string;
-	/** Image host URL recorded at upload/import time; absent on legacy Blob records until migration. */
+	/** Image host URL recorded at upload/import time. */
 	publishedUrl?: string;
 	url?: string;
 	contentUrl?: string;
-	/** Legacy Blob drafts may still carry a pathname; it is ignored by the admin UI. */
+	/** Legacy drafts may carry a pathname; it is ignored by the admin UI. */
 	pathname?: string;
 	createdAt: string;
 };

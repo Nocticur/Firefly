@@ -1,33 +1,10 @@
 import { ApiFailure, runtimeEnvironment } from "./security.js";
-import { normalizeKvConfig, type KvConfig } from "./kv.js";
 import {
 	normalizeCloudflareConfig,
 	type CloudflareKvConfig,
 } from "./cloudflare-kv.js";
 
-export type StorageConfig =
-	| ({ provider: "upstash" } & KvConfig)
-	| CloudflareKvConfig;
-
-function readUpstash(
-	prefix: string,
-	env: NodeJS.ProcessEnv,
-): StorageConfig | undefined {
-	const url =
-		env[`${prefix}KV_REST_API_URL`] ||
-		env[`${prefix}UPSTASH_REDIS_REST_URL`];
-	const token =
-		env[`${prefix}KV_REST_API_TOKEN`] ||
-		env[`${prefix}UPSTASH_REDIS_REST_TOKEN`];
-	if (!url && !token) return undefined;
-	if (!url || !token)
-		throw new ApiFailure(
-			503,
-			"KV_CONFIGURATION_REQUIRED",
-			`缺少 ${prefix}KV_REST_API_URL 或 ${prefix}KV_REST_API_TOKEN`,
-		);
-	return { provider: "upstash", ...normalizeKvConfig(url, token) };
-}
+export type StorageConfig = CloudflareKvConfig;
 
 function readCloudflare(
 	prefix: string,
@@ -56,30 +33,11 @@ function selectConfig(
 	prefix: string,
 	env: NodeJS.ProcessEnv,
 ): StorageConfig | undefined {
-	const explicit = env.KV_PROVIDER?.trim().toLowerCase();
-	if (explicit && explicit !== "cloudflare" && explicit !== "upstash")
-		throw new ApiFailure(
-			503,
-			"KV_CONFIGURATION_REQUIRED",
-			"KV_PROVIDER 只能是 cloudflare 或 upstash",
-		);
-	if (explicit === "cloudflare") return readCloudflare(prefix, env);
-	if (explicit === "upstash") return readUpstash(prefix, env);
-	// Prefer Cloudflare when both are configured; KV_PROVIDER disambiguates.
-	return readCloudflare(prefix, env) || readUpstash(prefix, env);
+	return readCloudflare(prefix, env);
 }
 
 function sameStore(left: StorageConfig, right: StorageConfig): boolean {
-	if (left.provider !== right.provider) return false;
-	if (left.provider === "upstash" && right.provider === "upstash")
-		return left.url === right.url || left.token === right.token;
-	if (left.provider === "cloudflare" && right.provider === "cloudflare")
-		return (
-			(left.accountId === right.accountId &&
-				left.namespaceId === right.namespaceId) ||
-			left.token === right.token
-		);
-	return false;
+	return left.accountId === right.accountId && left.namespaceId === right.namespaceId;
 }
 
 /**
@@ -96,7 +54,7 @@ export function storageConfig(
 			throw new ApiFailure(
 				503,
 				"KV_CONFIGURATION_REQUIRED",
-				"缺少 Cloudflare KV（CF_ACCOUNT_ID/CF_KV_NAMESPACE_ID/CF_API_TOKEN）或 Upstash（KV_REST_API_URL/TOKEN），后台无法保存私有状态",
+				"缺少 Cloudflare KV（CF_ACCOUNT_ID/CF_KV_NAMESPACE_ID/CF_API_TOKEN），后台无法保存私有状态",
 			);
 		return config;
 	}

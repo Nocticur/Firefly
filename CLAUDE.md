@@ -101,8 +101,8 @@ LQIP data is generated into `src/constants/lqips.json` and committed — regener
 The Astro blog and the `/admin/` + `/api/` backend (Hono API + Vercel Workflow, source in `apps/admin`) deploy together to the same Vercel project with `pnpm build:vercel`; do not create a second project.
 
 - Formal posts, public settings, navigation and icons are committed to GitHub `master` by a GitHub App (`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`).
-- Private admin state (drafts, history, sessions, rate limits, comment/friend moderation, release tasks, backup index) lives in Cloudflare KV or Upstash Redis KV over REST, keyed by `admin-state:<sha256(siteId)>`; backup objects use `admin-backup:...`. There is no database and no Vercel Blob usage.
-- Images are uploaded/imported to CloudFlare-ImgBed (`IMGBED_API_TOKEN` / `IMGBED_BASE_URL`), not Blob.
+- Private admin state (drafts, history, sessions, rate limits, comment/friend moderation, release tasks, backup index) lives in Cloudflare KV over REST, keyed by `admin-state:<sha256(siteId)>:data`; immutable backup objects use `admin-backup:<sha256(siteId)>:<sha256(backupId)>:<checksum>`. There is no database, no Vercel Blob and no Upstash backend.
+- Images are uploaded/imported to CloudFlare-ImgBed (`IMGBED_API_TOKEN` / `IMGBED_BASE_URL`); Cloudflare KV stores only media metadata and the public HTTPS URL.
 - Login verifies `ADMIN_ENTRY_PASSWORD` (3–10 characters, server-side salted scrypt) and uses server sessions; there is no JWT rewrite.
-- Development/preview fall back to an in-memory store when no dedicated KV is configured (cleared on restart); production requires Cloudflare KV (`CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` / `CF_API_TOKEN`) or Upstash (`KV_REST_API_URL` / `KV_REST_API_TOKEN`).
+- Development/preview fall back to an in-memory store when no dedicated KV is configured (cleared on restart); production requires Cloudflare KV (`CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` / `CF_API_TOKEN`) and never falls back to memory.
 - Docs: `docs/nocticur/README.md`, `deployment.md`, `environment-variables.md`, `free-deployment.md`.

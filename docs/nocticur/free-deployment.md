@@ -1,11 +1,11 @@
 # 部署服务与用量
 
-博客和后台部署在一个 Vercel `firefly` 项目，不创建第二个后台项目，不购买服务或升级套餐。后台私有状态与备份使用 Cloudflare KV 或 Upstash Redis 的免费额度（二选一），图片使用自建 CloudFlare-ImgBed，不使用 Vercel Blob，也不使用数据库。
+博客和后台部署在一个 Vercel `firefly` 项目，不创建第二个后台项目，不购买服务或升级套餐。后台私有状态与备份使用 Cloudflare KV 的免费额度，图片使用自建 CloudFlare-ImgBed，不使用 Vercel Blob、Upstash Redis，也不使用数据库。
 
 | 功能 | 服务 | 配置方式 |
 | --- | --- | --- |
 | 博客、后台、API、Workflow | Vercel Hobby（现有 `firefly` 项目） | 根目录 `pnpm build:vercel` |
-| 草稿、历史、会话、限流、审核、任务索引与备份 | Cloudflare KV 或 Upstash Redis（二选一，均有免费额度） | Cloudflare 填 `CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` / `CF_API_TOKEN`；Upstash 填 `KV_REST_API_URL` / `KV_REST_API_TOKEN` |
+| 草稿、历史、会话、限流、审核、任务索引与备份 | Cloudflare KV（免费额度） | 填 `CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` / `CF_API_TOKEN` |
 | 管理入口 | 服务端密码登录 | 填 `ADMIN_ENTRY_PASSWORD`，无需第三方登录 |
 | 图片上传与外链导入 | CloudFlare-ImgBed（自建） | 填 `IMGBED_API_TOKEN`，可选 `IMGBED_BASE_URL` |
 | 正式内容与发布 | GitHub App | 限定目标仓库，显式发布时提交 `master` |
@@ -17,7 +17,7 @@
 | 服务 | 免费额度（以官方当前说明为准） | 对本项目的影响 |
 | --- | --- | --- |
 | Vercel Hobby | 免费，含静态托管、函数与 Cron；函数请求体约 **4.5 MiB** | 直接上传图片限制 4 MiB；外链导入最大 32 MiB（由服务端拉取，不进请求体）；每日 Cron 一次 |
-| Upstash Redis 免费 | **250 MB** 存储、**50 万命令/月**、单次请求 **10 MiB** | 状态文档解码后上限 16 MiB、压缩编码后上限 8 MiB；单个备份对象上限 8 MiB；每次读写都计命令 |
+| Upstash Redis 免费 | 已不再使用 | 历史方案已删除，运行时不会再读取 Upstash 变量 |
 | Cloudflare KV 免费 | 约 **1 GB** 存储、每天 **10 万次读 / 1000 次写**（以账户当前套餐为准） | 值最大 25 MiB；同 key 约 1 次/秒写入；最终一致、无原子 CAS，后台并发写需谨慎 |
 | CloudFlare-ImgBed | 自建在 Cloudflare 上，受 Cloudflare 免费套餐与图床自身配置限制 | 图片由 ImgBed 直接提供，不占 Vercel 带宽；单张导入 32 MiB 上限 |
 | GitHub App | 免费 | 读取基线与发布提交，受仓库权限限制 |
@@ -25,7 +25,7 @@
 
 额度是上限而不是承诺：不能把“无数据库”“无 Blob”等同于无限免费。个人博客的少量写入通常远低于免费额度，但以下使用会更费命令、空间或写入次数：
 
-- Upstash 每次状态读取与保存都是一次或多次 Redis 命令；Cloudflare KV 每次登录、保存草稿或审核都会写同一个 key，受同 key 1 次/秒限制。
+- Cloudflare KV 每次登录、保存草稿或审核都会写同一个 key，受同 key 1 次/秒限制，因此后台按单人管理使用。
 - 备份对象不可变，创建后不会原地覆盖；每日维护清理超过 30 天的已结束历史、发布任务与备份，以控制存储占用。
 - 状态文档过大时写入会返回 `507`，应先清理历史或减少媒体记录，而不是升级套餐。
 - Cloudflare KV 最终一致，跨区域可能短暂读到旧值；并发写可能后写覆盖。后台是单人使用时影响较小。
@@ -35,7 +35,6 @@
 ## 相关文档
 
 - [Vercel 套餐与价格](https://vercel.com/pricing)
-- [Upstash Redis 定价与限制](https://upstash.com/pricing/redis)
 - [Cloudflare KV 定价与限制](https://developers.cloudflare.com/kv/platform/pricing/)
 - [CloudFlare-ImgBed](https://github.com/MarSeventh/CloudFlare-ImgBed)
 - [Cloudflare 免费套餐](https://www.cloudflare.com/plans/free/)

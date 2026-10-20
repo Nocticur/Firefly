@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
-import { gzipSync, gunzipSync } from "node:zlib";
 import { ApiFailure } from "./security.js";
-import { decodeState, encodeState, stateKeys } from "./kv.js";
+import {
+	MAX_KV_VALUE_BYTES,
+	decodeBackup,
+	decodeState,
+	encodeBackup,
+	encodeState,
+	stateKey,
+} from "./storage-codec.js";
 import type { DocumentBackend } from "./file-store.js";
 
 export type CloudflareKvConfig = {
@@ -11,7 +17,6 @@ export type CloudflareKvConfig = {
 	token: string;
 };
 
-export const MAX_CF_VALUE_BYTES = 8 * 1024 * 1024;
 const MAX_CF_RESPONSE_BYTES = 12 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_RETRIES = 4;
@@ -139,7 +144,7 @@ async function writeValue(
 	key: string,
 	value: string,
 ): Promise<void> {
-	if (Buffer.byteLength(value, "utf8") > MAX_CF_VALUE_BYTES)
+	if (Buffer.byteLength(value, "utf8") > MAX_KV_VALUE_BYTES)
 		throw new ApiFailure(507, "FILE_STORE_TOO_LARGE", "Cloudflare KV 值超出存储限制");
 	await request(config, key, {
 		method: "PUT",
@@ -156,7 +161,7 @@ export function createCloudflareKvDocumentBackend(
 	config: CloudflareKvConfig,
 	site: string,
 ): DocumentBackend {
-	const key = stateKeys(site).data;
+	const key = stateKey(site);
 	return {
 		async read() {
 			const raw = await readValue(config, key);
@@ -181,14 +186,6 @@ export type CloudflareKvBackupProvider = {
 	delete(key: string): Promise<void>;
 };
 
-function encodeBytes(bytes: Uint8Array): string {
-	return gzipSync(bytes, { level: 9 }).toString("base64");
-}
-
-function decodeBytes(value: string): Buffer {
-	return gunzipSync(Buffer.from(value, "base64"));
-}
-
 export function createCloudflareKvBackupProvider(
 	config: CloudflareKvConfig,
 ): CloudflareKvBackupProvider {
@@ -201,7 +198,7 @@ export function createCloudflareKvBackupProvider(
 		const value = await readValue(config, key);
 		if (value === null) return null;
 		try {
-			return decodeBytes(value);
+			return decodeBackup(value);
 		} catch {
 			throw new Error("Backup value is corrupt");
 		}
@@ -214,7 +211,7 @@ export function createCloudflareKvBackupProvider(
 				if (!existing.equals(bytes)) throw new Error("Immutable backup contains different bytes");
 				return;
 			}
-			await writeValue(config, key, encodeBytes(bytes));
+			await writeValue(config, key, encodeBackup(bytes));
 		},
 		get,
 		async delete(key) {

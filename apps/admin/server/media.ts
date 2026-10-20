@@ -209,7 +209,7 @@ export async function publishMediaForSnapshot(ids: string[], _taskId: string, op
 		const row = collection(state, "entities")[`media:${id}`]; const current = row?.data as Media | undefined;
 		const matchesCurrent = sameMediaBytes(current, frozen);
 		const url = publishedUrlOf(frozen.publishedUrl) ?? (matchesCurrent ? publishedUrlOf(current!.publishedUrl) : undefined);
-		if (!url) throw new ApiFailure(409, "MEDIA_MIGRATION_REQUIRED", "媒体尚未迁移到图床，请先运行 Blob→KV/ImgBed 迁移");
+		if (!url) throw new ApiFailure(409, "MEDIA_MIGRATION_REQUIRED", "媒体缺少图床地址，请在媒体库重新上传或导入");
 		if (matchesCurrent) await store.update((next) => {
 			assertSite(next, site);
 			const nextRow = collection(next, "entities")[`media:${id}`]; const nextMedia = nextRow?.data as Media | undefined;

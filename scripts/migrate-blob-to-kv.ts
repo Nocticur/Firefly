@@ -1,10 +1,9 @@
 /**
- * One-off migration: Vercel Blob private document -> Cloudflare KV or Upstash + ImgBed.
+ * One-off migration: Vercel Blob private document -> Cloudflare KV + ImgBed.
  *
  * Run locally with production credentials before deploying the KV build:
  *   BLOB_PRIVATE_READ_WRITE_TOKEN=...
- *   CF_ACCOUNT_ID=... CF_KV_NAMESPACE_ID=... CF_API_TOKEN=...   (Cloudflare)
- *   or KV_REST_API_URL=... KV_REST_API_TOKEN=...                 (Upstash)
+ *   CF_ACCOUNT_ID=... CF_KV_NAMESPACE_ID=... CF_API_TOKEN=...
  *   IMGBED_API_TOKEN=... IMGBED_BASE_URL=...
  *   APP_ENV=production GITHUB_REPOSITORY=Nocticur/Firefly
  *   pnpm exec tsx scripts/migrate-blob-to-kv.ts
@@ -44,10 +43,7 @@ function required(name: string): string {
 const repository = process.env.GITHUB_REPOSITORY?.trim() || "Nocticur/Firefly";
 const site = `${repository}:production`;
 const siteHash = sha256(site);
-const keys = {
-	meta: `admin-state:${siteHash}:meta`,
-	data: `admin-state:${siteHash}:data`,
-};
+const stateKey = `admin-state:${siteHash}:data`;
 
 const cfAccount =
 	process.env.CF_ACCOUNT_ID?.trim() ||
@@ -58,34 +54,10 @@ const cfNamespace =
 const cfToken =
 	process.env.CF_API_TOKEN?.trim() ||
 	process.env.CLOUDFLARE_API_TOKEN?.trim();
-const useCloudflare = Boolean(cfAccount || cfNamespace || cfToken);
-if (useCloudflare && (!cfAccount || !cfNamespace || !cfToken))
+if (!cfAccount || !cfNamespace || !cfToken)
 	throw new Error(
 		"Cloudflare KV requires CF_ACCOUNT_ID, CF_KV_NAMESPACE_ID and CF_API_TOKEN",
 	);
-
-const kvUrl = useCloudflare ? "" : required("KV_REST_API_URL").replace(/\/+$/, "");
-const kvToken = useCloudflare ? "" : required("KV_REST_API_TOKEN");
-if (kvUrl && !/^https:\/\/[^/]+$/.test(kvUrl))
-	throw new Error("KV_REST_API_URL must be an HTTPS origin");
-
-async function kv<T>(command: unknown[]): Promise<T> {
-	const response = await fetch(kvUrl, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${kvToken}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify(command),
-		signal: AbortSignal.timeout(30_000),
-	});
-	const payload = (await response.json().catch(() => null)) as
-		| { result?: unknown; error?: unknown }
-		| null;
-	if (!response.ok || !payload || payload.error !== undefined)
-		throw new Error("KV command failed");
-	return payload.result as T;
-}
 
 function cloudflareValueUrl(key: string): string {
 	return `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cfAccount!)}/storage/kv/namespaces/${encodeURIComponent(cfNamespace!)}/values/${encodeURIComponent(key)}`;
@@ -125,13 +97,7 @@ async function cloudflarePut(key: string, value: string): Promise<void> {
 }
 
 async function readStateValue(): Promise<string | null> {
-	if (useCloudflare) return cloudflareGet(keys.data);
-	const existing = await kv<[string | null, string | null]>([
-		"MGET",
-		keys.meta,
-		keys.data,
-	]);
-	return existing[1];
+	return cloudflareGet(stateKey);
 }
 
 
@@ -280,12 +246,7 @@ async function main(): Promise<void> {
 	);
 	if (Buffer.byteLength(encoded, "utf8") > MAX_KV_VALUE_BYTES)
 		throw new Error("Migrated state exceeds the KV value limit");
-	const etag = randomUUID();
-	if (useCloudflare) {
-		await cloudflarePut(keys.data, encoded);
-	} else {
-		await kv(["MSET", keys.meta, etag, keys.data, encoded]);
-	}
+	await cloudflarePut(stateKey, encoded);
 	const check = await readStateValue();
 	if (typeof check !== "string")
 		throw new Error("KV read-back verification failed");
@@ -293,7 +254,7 @@ async function main(): Promise<void> {
 	if (sha256(readBack) !== sha256(json))
 		throw new Error("KV read-back checksum mismatch");
 	console.log(
-		`Migrated ${migratedMedia} media item(s), skipped ${skippedMedia}, state=${Buffer.byteLength(json)} bytes, ${useCloudflare ? "Cloudflare KV" : `etag=${etag}`}.`,
+		`Migrated ${migratedMedia} media item(s), skipped ${skippedMedia}, state=${Buffer.byteLength(json)} bytes.`,
 	);
 	console.log(
 		"Legacy Blob backup objects were not copied. Restore them before cutover if they are still needed.",
