@@ -9,13 +9,14 @@ test("update comparison distinguishes older, newer and unsupported release versi
 	assert.equal(newerStableVersion("6.16.8", "v6.17.0-beta"), null);
 });
 test("failed providers never imply up-to-date and backend comparison needs actual deployed SHA", async () => {
-	const keys = ["GITHUB_APP_ID", "GITHUB_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY", "VERCEL_GIT_COMMIT_SHA"];
+	const keys = ["GITHUB_TOKEN", "GITHUB_APP_ID", "GITHUB_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY", "VERCEL_GIT_COMMIT_SHA"];
 	const saved = keys.map((key) => process.env[key]);
 	try {
 		for (const key of keys) delete process.env[key];
-		const unavailable = await checkUpdates(async () => new Response("unavailable", { status: 503 }), async () => { throw new Error("must not request an unconfigured App"); });
+		const unavailable = await checkUpdates(async () => new Response("unavailable", { status: 503 }), async () => { throw new Error("must not request unconfigured credentials"); });
 		assert.equal(unavailable.updateAvailable, null); assert.equal(unavailable.backendUpdateAvailable, null); assert.equal(unavailable.backendCheckStatus, "configuration-required");
-		for (const key of keys.slice(0, 3)) process.env[key] = "test-configured-adapter";
+		// A personal access token is the primary credential now.
+		process.env.GITHUB_TOKEN = "test-configured-adapter";
 		process.env.VERCEL_GIT_COMMIT_SHA = "a".repeat(40);
 		const available = await checkUpdates(async () => Response.json({ tag_name: "v6.17.0", html_url: "https://github.com/CuteLeaf/Firefly/releases/tag/v6.17.0" }), async () => "b".repeat(40));
 		assert.equal(available.updateAvailable, true); assert.equal(available.backendUpdateAvailable, true); assert.equal(available.backendCheckStatus, "available");

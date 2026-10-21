@@ -229,6 +229,7 @@ const requestStore = new AsyncLocalStorage<FileStore>();
 export function withStore<T>(store: FileStore, operation: () => T): T {
 	return requestStore.run(store, operation);
 }
+const memoryStores = new Map<string, FileStore>();
 export function getStore(): FileStore {
 	const supplied = requestStore.getStore();
 	if (supplied) return supplied;
@@ -238,7 +239,13 @@ export function getStore(): FileStore {
 		const backend = createCloudflareKvDocumentBackend(config, site);
 		return createFileStore(backend, site);
 	}
-	// Development and preview may run without a dedicated KV. Production throws
-	// from storageConfig() above, so an unconfigured server never silently loses data.
-	return createMemoryStore(site);
+	// Cloudflare KV is optional: content and settings come from the Git repository, so an
+	// unconfigured deployment runs on an in-process store. It is cached per site because a
+	// fresh store per call would discard every draft as soon as the request ended.
+	let memory = memoryStores.get(site);
+	if (!memory) {
+		memory = createMemoryStore(site);
+		memoryStores.set(site, memory);
+	}
+	return memory;
 }

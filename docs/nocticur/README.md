@@ -1,6 +1,6 @@
 # Nocticur 的 Firefly 博客与管理后台
 
-博客、`/admin/` 与 `/api/` 仍部署在同一个 Vercel 项目（`firefly`），根构建命令保持 `pnpm build:vercel`。正式文章、设置、导航和图标由后台通过 GitHub App 提交到 GitHub `master`；后台私有状态与备份存 Cloudflare KV（REST API），图片上传和外链导入走 CloudFlare-ImgBed。当前不再使用 Vercel Blob、Upstash Redis，也不使用任何数据库。
+博客、`/admin/` 与 `/api/` 仍部署在同一个 Vercel 项目（`firefly`），根构建命令保持 `pnpm build:vercel`。正式文章、设置、导航和图标由后台直接读写你的 GitHub 仓库（细粒度 PAT，默认 `Nocticur/Firefly` 的 `master`）；图片上传和外链导入走 CloudFlare-ImgBed。当前不使用数据库、Cloudflare KV、Vercel Blob 或 Upstash Redis。
 
 当前配置以 [环境变量填写清单](./environment-variables.md) 和 [统一部署说明](./deployment.md) 为准；服务额度见 [免费部署说明](./free-deployment.md)。
 
@@ -10,20 +10,19 @@
 | --- | --- | --- |
 | 博客 | Vercel 项目 `firefly` | Astro 静态站点，`https://blog.mourn.top/`；与后台同源构建，无需第二个项目 |
 | 管理界面、API、Workflow | 同一 Vercel 项目 | 入口 `/admin/` 与 `/api/`，Hono API 与 Vercel Workflow 部署在同一份 `.vercel/output` |
-| 正式内容 | GitHub `master` | 文章、公开设置、导航、图标由 GitHub App 原子提交；Git 提交是公开内容的唯一来源 |
-| 后台私有状态 | Cloudflare KV | 草稿、历史、登录会话、限流、评论/友链审核、发布任务、维护任务与备份索引；最终一致，无原子 CAS |
+| 正式内容 | 你的 GitHub 仓库（如 `Nocticur/blog` 的 `master`） | 文章、公开设置、导航、图标由后台原子提交；Git 提交是公开内容的唯一来源 |
+| 后台草稿与运行时数据 | 后台内部状态 | 草稿、历史、评论/友链审核、发布任务与维护任务；未配置 Cloudflare KV 时保存在进程内存，重启即清空 |
 | 图片与图标资源 | CloudFlare-ImgBed | 上传与外链导入都由服务端调用图床；`IMGBED_API_TOKEN` / `IMGBED_BASE_URL` |
-| 备份对象 | 与状态同一 KV | 不可变对象存 `admin-backup:<sha256(siteId)>:<sha256(backupId)>:<checksum>` |
-| 登录 | 服务端密码 + 服务端会话 | 只验证 `ADMIN_ENTRY_PASSWORD`，不做 JWT 重写 |
+| 登录 | 服务端密码 + 无状态签名 Cookie | 只验证 `ADMIN_ENTRY_PASSWORD`，会话由 HMAC 签名，不需要会话表 |
 
-KV 状态按站点与环境隔离：`siteId` 为 `GITHUB_REPOSITORY`（默认 `Nocticur/Firefly`）加运行环境，状态 key 为 `admin-state:<sha256(siteId)>:data`。Cloudflare KV 没有原子 CAS，只能读后写并在写入前比较内容摘要与修订号，并发时可能后写覆盖且跨区域可能短暂读到旧值，冲突时返回 `409` 提示刷新后重新编辑。生产未配置 Cloudflare KV 时后台拒绝启动写入；开发/预览未配置独立 KV 时使用内存存储，重启后清空，且不能与生产共用同一命名空间。
+`siteId` 为 `GITHUB_REPOSITORY`（默认 `Nocticur/Firefly`）加运行环境。**Git 是唯一持久数据源**：后台首次打开会自动导入仓库现有文章与设置，因此不会显示空白。可选配置 Cloudflare KV 时，后台状态写入 KV；未配置时用进程内存，并发写冲突返回 `409` 提示刷新后重新编辑。文章与设置的正式版本始终以 Git 提交为准。
 
 ## 登录方式
 
 博客作者卡片和手机导航菜单提供“后台管理”入口。进入页只验证管理密码：
 
 - 密码为 3～10 个字符，由 `ADMIN_ENTRY_PASSWORD` 提供，服务端使用 scrypt（随机加盐）计算并核对哈希，明文不写入日志或状态。
-- 验证成功后建立服务端会话，设置 `__Host-admin-session` 与 `__Host-admin-entry` Cookie（Secure、HttpOnly、SameSite=Lax）；管理写请求同时校验管理源与 `x-csrf-token`，并受持久限流保护。
+- 验证成功后签发 HMAC 签名的无状态会话，设置 `__Host-admin-session` Cookie（Secure、HttpOnly、SameSite=Lax）；会话保存令牌即包含身份与过期时间，服务端不存会话表，所以退出只清除 Cookie。轮换 `ADMIN_ENTRY_PASSWORD` 或设置 `ADMIN_SESSION_SECRET` 会让此前所有会话立即失效。管理写请求同时校验管理源与 `x-csrf-token`，并受限流保护。
 - 不需要用户名、GitHub 登录或 OAuth。
 
 ## 功能清单
@@ -32,12 +31,12 @@ KV 状态按站点与环境隔离：`siteId` 为 `GITHUB_REPOSITORY`（默认 `N
 | --- | --- |
 | 仪表盘 | 当前部署 SHA、文章/发布/审核计数、维护与发布状态、待处理事项 |
 | 文章与历史 | 列表、源码与可视编辑、草稿、版本历史与恢复；支持完整 Markdown/MDX 源码和未知片段保护 |
-| 设置 | 站点资料、主题与功能开关等公开设置；保存为私有版本，发布时提交 GitHub |
-| 导航与图标 | 导航链接与图标位编辑；校验层级、URL 与字段，随发布提交 |
+| 设置 | 站点资料、主题与功能开关等公开设置；可只存草稿，也可一键提交回仓库 |
+| 导航与图标 | 导航链接与图标位编辑；校验层级、URL 与字段，随提交或发布写入 |
 | 媒体 | 上传与导入图片到 ImgBed、记录 `alt` 与图注、发布时替换为公开地址；直接上传限制 4 MiB，外链导入最大 32 MiB |
 | 评论 | 公开评论审核、删除占位、封禁与限流；Turnstile 校验，访客邮箱不公开 |
 | 友链 | 申请审核、分组与排序、上线状态与健康检测结果展示 |
-| 发布 | 创建发布任务、冻结快照、GitHub 原子提交、等待 Workflow、核验生产域名与发布清单；失败或未知结果可核查 |
+| 发布 | 创建发布任务、冻结快照、直接提交 Git、核验生产域名与发布清单；未配置 KV 时在同一请求内完成；失败或未知结果可核查 |
 | 维护 | 更新检查、创建备份、恢复、每日 Cron 与 30 天历史清理；生产发布与维护开关默认关闭 |
 
 公开互动（评论、友链申请）可在“服务设置”中按需开启；生产发布与生产维护同样需要管理员显式开启，填入密钥不会自动开启。
@@ -56,7 +55,7 @@ pnpm --filter @nocticur/admin test
 pnpm build:vercel
 ```
 
-`pnpm build:vercel` 生成一份 `.vercel/output`，包含静态博客、管理资源、API 与 Workflow，并核验产物结构。本地管理 API 用 `pnpm --filter @nocticur/admin dev`（端口 3000），管理界面用 `pnpm --filter @nocticur/admin dev:ui`（Vite 5173，代理 `/api`）。本地与 Preview 使用各自的密码和可选 KV；未配置 KV 时使用内存存储，重启清空。浏览器回归可用 `pnpm test:browser`（截图写入 `cache/verify-screenshots/`）。
+`pnpm build:vercel` 生成一份 `.vercel/output`，包含静态博客、管理资源、API 与 Workflow，并核验产物结构。本地管理 API 用 `pnpm --filter @nocticur/admin dev`（端口 3000），管理界面用 `pnpm --filter @nocticur/admin dev:ui`（Vite 5173，代理 `/api`）。本地与 Preview 使用各自的密码；本地要读写真实仓库时，在 `.env` 里配置 `GITHUB_TOKEN`、`GITHUB_REPOSITORY`、`GITHUB_BRANCH`。浏览器回归可用 `pnpm test:browser`（截图写入 `cache/verify-screenshots/`）。
 
 ## REST API 简表
 
@@ -66,7 +65,7 @@ pnpm build:vercel
 | --- | --- |
 | 认证 | `GET/POST /api/auth/entry`、`GET /api/auth/session`、`POST /api/auth/logout` |
 | 文章 | `GET/POST /api/posts`、`GET/PUT/PATCH /api/posts/{id}`、`GET /api/posts/{id}/history`、`POST /api/posts/{id}/restore`、`POST /api/import` |
-| 设置 | `GET/PUT /api/settings`、`/api/navigation`、`/api/icons`、`/api/service-settings` |
+| 设置 | `GET/PUT /api/settings`、`POST /api/settings/commit`、`/api/navigation`、`/api/icons`、`/api/service-settings` |
 | 媒体 | `GET /api/media`、`POST /api/media/upload`（multipart，≤4 MiB）、`GET /api/media/{id}/content`（302 到图床地址）、`POST /api/media/import`、`PATCH/DELETE /api/media/{id}` |
 | 公开互动 | `GET/POST /api/public/comments`、`GET/POST /api/public/friends` |
 | 审核 | `/api/comments/{id}/delete`、`/api/bans`、`/api/friends/{id}/approve`、`/api/friends/{id}/reject`、`PATCH /api/friends/{id}` |

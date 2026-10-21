@@ -41,23 +41,15 @@ function sameStore(left: StorageConfig, right: StorageConfig): boolean {
 }
 
 /**
- * Production always needs KV. Development and preview use their own optional KV
- * and fall back to an in-memory store, which keeps them isolated and ephemeral.
+ * Cloudflare KV is optional now that the Git repository is the source of truth for
+ * content and settings. It is only consulted when explicitly configured, and a
+ * partially configured production KV is still rejected so no data leaks between stores.
  */
 export function storageConfig(
 	env: NodeJS.ProcessEnv = process.env,
 ): StorageConfig | null {
 	const environment = runtimeEnvironment();
-	if (environment === "production") {
-		const config = selectConfig("", env);
-		if (!config)
-			throw new ApiFailure(
-				503,
-				"KV_CONFIGURATION_REQUIRED",
-				"缺少 Cloudflare KV（CF_ACCOUNT_ID/CF_KV_NAMESPACE_ID/CF_API_TOKEN），后台无法保存私有状态",
-			);
-		return config;
-	}
+	if (environment === "production") return selectConfig("", env) ?? null;
 	const prefix = environment === "preview" ? "ADMIN_PREVIEW_" : "ADMIN_DEV_";
 	const scoped = selectConfig(prefix, env);
 	if (!scoped) return null;

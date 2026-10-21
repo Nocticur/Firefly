@@ -26,14 +26,15 @@ function appJwt(): string {
 async function installationToken(write: boolean): Promise<string> {
 	let response: Response;
 	const authorization = `Bearer ${appJwt()}`;
+	const { repository } = repositoryCoordinates();
 	let installationId = process.env.GITHUB_INSTALLATION_ID;
 	if (!installationId) {
 		try {
-			const installation = await fetch("https://api.github.com/repos/Nocticur/Firefly/installation", {
+			const installation = await fetch(`https://api.github.com/repos/${repository}/installation`, {
 				headers: { Authorization: authorization, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
 				redirect: "error", signal: AbortSignal.timeout(20_000),
 			});
-			if (!installation.ok) throw new GitHubError(installation.status, "GitHub App must be installed on Nocticur/Firefly");
+			if (!installation.ok) throw new GitHubError(installation.status, `GitHub App must be installed on ${repository}`);
 			const data = await installation.json() as { id?: unknown };
 			if (typeof data?.id !== "number" || !Number.isSafeInteger(data.id) || data.id <= 0) throw new GitHubError(502, "GitHub returned an invalid installation ID");
 			installationId = String(data.id);
@@ -45,7 +46,7 @@ async function installationToken(write: boolean): Promise<string> {
 	try {
 		response = await fetch(`https://api.github.com/app/installations/${encodeURIComponent(installationId)}/access_tokens`, {
 			method: "POST", headers: { Authorization: authorization, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
-			body: JSON.stringify({ repositories: ["Firefly"], permissions: { contents: write ? "write" : "read" } }), signal: AbortSignal.timeout(20_000),
+			body: JSON.stringify({ repositories: [repository.split("/")[1]], permissions: { contents: write ? "write" : "read" } }), signal: AbortSignal.timeout(20_000),
 		});
 	} catch { throw new GitHubError(0, "GitHub App installation authentication did not return a result"); }
 	if (!response.ok) throw new GitHubError(response.status, "GitHub App installation authentication failed");
@@ -57,7 +58,7 @@ async function installationToken(write: boolean): Promise<string> {
 }
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const write = init.method === "POST";
-	const token = await installationToken(write);
+	const token = await accessToken(write);
 	let response: Response;
 	try {
 		response = await fetch(`https://api.github.com${path}`, { ...init, headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json", ...init.headers, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
@@ -66,8 +67,34 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 	try { return await response.json() as T; }
 	catch { throw new GitHubError(502, "GitHub returned an invalid result; reconcile before retrying", write); }
 }
-const repo = "/repos/Nocticur/Firefly";
 const validSha = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{40}$/i.test(value);
+export type RepositoryCoordinates = { repository: string; branch: string };
+/** Repository coordinates are configuration, never source. Swap blogs without editing code. */
+export function repositoryCoordinates(env: NodeJS.ProcessEnv = process.env): RepositoryCoordinates {
+	const repository = (env.GITHUB_REPOSITORY || "Nocticur/Firefly").trim();
+	if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository))
+		throw new GitHubError(503, "GITHUB_REPOSITORY 必须是 owner/repo 形式");
+	const branch = (env.GITHUB_BRANCH || "master").trim();
+	if (
+		!/^[A-Za-z0-9._/-]{1,200}$/.test(branch) ||
+		branch.startsWith("/") ||
+		branch.endsWith("/") ||
+		branch.split("/").some((part) => !part || part === "." || part === "..")
+	)
+		throw new GitHubError(503, "GITHUB_BRANCH 不合法");
+	return { repository, branch };
+}
+/** A personal access token needs no GitHub App handshake; the App remains a fallback. */
+export function personalToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	const token = env.GITHUB_TOKEN?.trim();
+	return token ? token : undefined;
+}
+function repoPath(): string {
+	return `/repos/${repositoryCoordinates().repository}`;
+}
+async function accessToken(write: boolean): Promise<string> {
+	return personalToken() || installationToken(write);
+}
 function managedPath(path: string): boolean {
 	if (typeof path !== "string" || /[\\\x00-\x1f\x7f]/.test(path) || path.split("/").some((part) => part === "" || part === "." || part === "..")) return false;
 	return path === "vercel.json" || /^src\/content\/posts\/.+\.mdx?$/.test(path) || /^src\/data\/(published-state|managed-settings|redirects)\.json$/.test(path) || /^src\/config\/(siteConfig|profileConfig|navBarConfig|friendsConfig)\.ts$/.test(path);
@@ -91,21 +118,22 @@ function hasMarkers(message: string, taskId: string, digest: string): boolean {
 		&& lines.filter((line) => line.startsWith("Firefly-Snapshot-Digest:")).length === 1 && lines.includes(`Firefly-Snapshot-Digest: ${digest}`);
 }
 export async function branchHead(): Promise<string> {
-	const ref = await request<{ object?: { sha?: unknown } }>(`${repo}/git/ref/heads/master`);
+	const { branch } = repositoryCoordinates();
+	const ref = await request<{ object?: { sha?: unknown } }>(`${repoPath()}/git/ref/heads/${branch}`);
 	if (!validSha(ref?.object?.sha)) throw new GitHubError(502, "GitHub returned an invalid branch head");
 	return ref.object.sha;
 }
 export async function readRepositoryFiles(sha?: string): Promise<{ headSha: string; files: RepositoryFile[]; publishedState?: unknown }> {
 	if (sha !== undefined && !validSha(sha)) throw new GitHubError(400, "Invalid immutable repository revision");
 	const headSha = sha || await branchHead();
-	const tree = await request<{ truncated: boolean; tree: Array<{ path: string; type: string; sha: string }> }>(`${repo}/git/trees/${headSha}?recursive=1`);
+	const tree = await request<{ truncated: boolean; tree: Array<{ path: string; type: string; sha: string }> }>(`${repoPath()}/git/trees/${headSha}?recursive=1`);
 	if (tree.truncated) throw new Error("Repository tree is truncated; baseline cannot be imported safely");
 	const files: RepositoryFile[] = [];
 	const items = tree.tree.filter((item) => item.type === "blob" && managedPath(item.path));
 	// Bound concurrency and obtain each blob at the frozen commit, never mutable branch URLs.
 	for (let offset = 0; offset < items.length; offset += 8) {
 		files.push(...await Promise.all(items.slice(offset, offset + 8).map(async (item) => {
-			const blob = await request<{ encoding: string; content: string }>(`${repo}/git/blobs/${item.sha}`);
+			const blob = await request<{ encoding: string; content: string }>(`${repoPath()}/git/blobs/${item.sha}`);
 			if (blob.encoding !== "base64") throw new Error("Unsupported GitHub blob encoding");
 			return { path: item.path, source: Buffer.from(blob.content, "base64").toString("utf8") };
 		})));
@@ -142,10 +170,11 @@ export const githubProvider: GitHubProvider = {
 			catch { throw new GitHubError(400, "Deployment config is invalid or does not match its managed redirects"); }
 		}
 		if (!additions.size && !removed.size) throw new GitHubError(400, "Release has no repository changes");
+		const coordinates = repositoryCoordinates();
 		const result = await request<CommitResult>("/graphql", {
 			method: "POST", body: JSON.stringify({
 				query: "mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){commit{oid}}}",
-				variables: { input: { branch: { repositoryNameWithOwner: "Nocticur/Firefly", branchName: "master" }, expectedHeadOid: baseSha,
+				variables: { input: { branch: { repositoryNameWithOwner: coordinates.repository, branchName: coordinates.branch }, expectedHeadOid: baseSha,
 					message: { headline: `content: publish ${taskId}`, body: `Firefly-Task: ${taskId}\nFirefly-Snapshot-Digest: ${digest}` },
 					fileChanges: { additions: files.map((file) => ({ path: file.path, contents: Buffer.from(file.source).toString("base64") })), deletions: deletions.map((path) => ({ path })) } } },
 			}),
@@ -160,13 +189,13 @@ export const githubProvider: GitHubProvider = {
 		const headSha = await branchHead();
 		for (let page = 1; page <= 5; page++) {
 			// Freeze pagination to one ancestry; moving/force-pushed master pages can mix histories.
-			const commits = await request<Array<{ sha: string; commit: { message: string } }>>(`${repo}/commits?sha=${headSha}&per_page=100&page=${page}`);
+			const commits = await request<Array<{ sha: string; commit: { message: string } }>>(`${repoPath()}/commits?sha=${headSha}&per_page=100&page=${page}`);
 			if (!Array.isArray(commits)) throw new GitHubError(502, "GitHub returned invalid commit history");
 			for (const commit of commits) {
 				if (!validSha(commit?.sha) || typeof commit.commit?.message !== "string" || !hasMarkers(commit.commit.message, taskId, digest)) continue;
 				const currentHead = await branchHead();
 				if (currentHead === headSha || currentHead === commit.sha) return commit.sha;
-				const comparison = await request<{ status?: string; merge_base_commit?: { sha?: string } }>(`${repo}/compare/${commit.sha}...${currentHead}`);
+				const comparison = await request<{ status?: string; merge_base_commit?: { sha?: string } }>(`${repoPath()}/compare/${commit.sha}...${currentHead}`);
 				if ((comparison?.status === "ahead" || comparison?.status === "identical") && comparison.merge_base_commit?.sha === commit.sha) return commit.sha;
 			}
 			if (commits.length < 100) break;

@@ -84,7 +84,7 @@ async function fixture() {
 		site,
 		fetcher,
 	});
-	const session = await issueSession(store, site),
+	const session = issueSession(),
 		cookie = `${entryCookie()}; __Host-admin-session=${session.token}`;
 	const moderate = (
 		path: string,

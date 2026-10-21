@@ -1,29 +1,32 @@
 # 博客与后台统一部署
 
-博客、`/admin/`、`/api/` 和 Workflow 部署在同一个 Vercel 项目 `firefly`。根构建命令保持 `pnpm build:vercel`，生成一份 `.vercel/output`；后台源码在 `apps/admin`，不需要第二个托管项目。正式内容由 GitHub App 提交到 GitHub `master`，后台私有状态与备份存 Cloudflare KV（REST API），图片存 CloudFlare-ImgBed。不使用 Vercel Blob、Upstash，也不使用数据库。
+博客、`/admin/`、`/api/` 和 Workflow 部署在同一个 Vercel 项目 `firefly`。根构建命令保持 `pnpm build:vercel`，生成一份 `.vercel/output`；后台源码在 `apps/admin`，不需要第二个托管项目。后台直接读写你的 GitHub 仓库并通过令牌提交到 `master`，图片存 CloudFlare-ImgBed。不使用数据库、Cloudflare KV、Vercel Blob 或 Upstash。
 
 ## 前置服务
 
 | 服务 | 用途 | 必需 |
 | --- | --- | --- |
 | Vercel 项目 `firefly` | 托管博客、后台、API 与 Workflow | 是 |
-| Cloudflare KV | 后台私有状态与备份对象；通过 REST API 访问 | 是（生产唯一存储） |
+| GitHub 仓库 + PAT | 后台唯一数据源；读取基线、提交 `master`、更新检查 | 是 |
 | CloudFlare-ImgBed | 图片上传与外链导入 | 使用媒体库时必需 |
-| GitHub App | 读取基线、原子提交 `master`、更新检查 | 发布文章/设置时必需 |
 | Vercel Token | 发布后核验生产部署与清单 | 发布时必需 |
 | Turnstile | 公开评论与友链申请校验 | 开启公开互动时必需 |
 
-## 添加 Cloudflare KV
+## 连接你的 Git 仓库
 
-1. 在 Cloudflare 控制台创建或选择一个 **KV namespace**。
-2. 创建 API Token，权限至少 **Workers KV Storage:Edit**，并记录：
-   - `CF_ACCOUNT_ID`：Cloudflare 账户 ID（32 位十六进制）
-   - `CF_KV_NAMESPACE_ID`：KV 命名空间 ID（32 位十六进制）
-   - `CF_API_TOKEN`：上一步的 Token（Secret，仅 Production）
-3. 三项必须同时配置；只配一部分会报 `KV_CONFIGURATION_REQUIRED`。不再有 `KV_PROVIDER` 切换开关。
-4. 说明：Cloudflare KV 是最终一致、无原子 CAS、同 key 约 1 次/秒写入。个人单管理员博客通常可用；并发写可能后写覆盖，跨区域可能短暂读到旧值，后台以修订号与内容摘要检测冲突并返回 `409`。
+后台以 Git 仓库为唯一数据源，不需要数据库或 Cloudflare KV。
 
-开发/预览需要独立数据时，配置 `ADMIN_DEV_CF_*` / `ADMIN_PREVIEW_CF_*`（账户 ID、命名空间 ID、Token 三件套）。不配置时开发/预览使用内存存储，重启即清空；生产不会回退到内存，也不会与开发/预览共用同一个命名空间。
+1. 在 GitHub 创建 **Fine-grained personal access token**，只授权目标仓库（例如 `Nocticur/blog`）。
+2. 权限：**Contents = Read and write**（提交文章与设置）、**Metadata = Read**（GitHub 强制要求）。
+3. 在 Vercel 项目里配置：
+   - `GITHUB_TOKEN`：上一步的令牌（Secret，仅 Production）
+   - `GITHUB_REPOSITORY`：`owner/repo`，例如 `Nocticur/blog`；不填时默认 `Nocticur/Firefly`
+   - `GITHUB_BRANCH`：例如 `master`；不填时默认 `master`
+4. 部署后打开 `/admin/` 输入 `ADMIN_ENTRY_PASSWORD` 登录，后台会自动导入仓库现有文章与设置，不会显示空白。
+
+仓库需要至少有一篇文章（`src/content/posts/**`），并且设置来源满足其一：已有 `src/data/managed-settings.json`，或可解析的 `src/config/siteConfig.ts`（后台会从 `title`、`subtitle`、`site_url`、`description`、`siteStartDate`、`timezone`、`navbar.logo.value`、`pages.*` 推导初始值）。
+
+Cloudflare KV 已不再需要；若历史上配置过 `CF_*`，可以删除。开发/预览默认也不需要任何存储配置。
 
 ## 配置 CloudFlare-ImgBed
 
@@ -32,9 +35,9 @@
 3. 后台调用 `POST <IMGBED_BASE_URL>/upload?returnFormat=full&autoRetry=false`，以 `Authorization: Bearer <IMGBED_API_TOKEN>` 上传，并保存返回的 HTTPS 图片地址。
 4. 图片由 ImgBed 直接提供；Vercel 函数请求体约 4.5 MiB，因此直接上传限制 4 MiB，更大的图片请用外链导入（最大 32 MiB）。
 
-## 配置 GitHub App 与 Vercel
+## 配置 GitHub 令牌与 Vercel
 
-- GitHub App：安装到 `Nocticur/Firefly`，权限为 Contents read/write、Metadata read；配置 `GITHUB_APP_ID` 与完整 PEM 的 `GITHUB_APP_PRIVATE_KEY`（Secret）。`GITHUB_INSTALLATION_ID` 可选，不填时由目标仓库接口自动查询。
+- GitHub：优先使用 `GITHUB_TOKEN`（细粒度 PAT，权限 Contents read/write + Metadata read）。GitHub App（`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`，`GITHUB_INSTALLATION_ID` 可选）只在没有 PAT 时作为回退。
 - 生产核验：配置 `VERCEL_TOKEN`（Secret，选择当前项目团队作用域）、可选 `VERCEL_TEAM_ID`；项目编号读取系统变量 `VERCEL_PROJECT_ID`（也接受 `VERCEL_BLOG_PROJECT_ID`）。
 - 若生产域名启用了 Deployment Protection，配置可选 `VERCEL_AUTOMATION_BYPASS_SECRET`，供发布核验读取受保护清单。
 - Vercel 项目需开启 **Enable access to System Environment Variables**，否则读不到 `VERCEL_ENV`、`VERCEL_URL`、`VERCEL_PROJECT_PRODUCTION_URL`、`VERCEL_PROJECT_ID`、`VERCEL_GIT_COMMIT_SHA` 等。
@@ -51,31 +54,28 @@
 2. 本地校验：`pnpm check`、`pnpm type-check`、`pnpm test:site`、`pnpm --filter @nocticur/admin type-check`、`pnpm --filter @nocticur/admin test`。
 3. 执行一次 `pnpm build:vercel`，确认生成 `.vercel/output` 且包含博客静态文件、管理资源、API 与 Workflow。
 4. 在 Vercel 导入仓库，项目根目录构建命令保持 `pnpm build:vercel`，安装命令 `pnpm install --frozen-lockfile`；不要为 `apps/admin` 另建项目。
-5. 按上节添加 Cloudflare KV、ImgBed、GitHub App、Vercel Token 等变量；生产 Secret 只勾选 Production。
+5. 按上节添加 `ADMIN_ENTRY_PASSWORD`、`GITHUB_TOKEN`、`GITHUB_REPOSITORY`、`GITHUB_BRANCH`、ImgBed、Vercel Token 等变量；生产 Secret 只勾选 Production。
 6. 部署后先登录 `/admin/`，依次验证会话刷新、退出、草稿保存与重读、媒体上传、一次显式发布、生产核验与备份；确认无误后再开启生产发布与每日维护。
 
-## 从 Vercel Blob 一次性切换
+## 从 Cloudflare KV 版本迁移
 
-本版本只支持 Cloudflare KV，不做 Blob/KV 双写，也不保留运行时 Blob 回退。切换顺序如下，旧 Blob 数据在新版本验证通过前不要删除：
+本版本不再需要任何数据库或键值存储。若你此前配置过 Cloudflare KV：
 
-1. **迁移脚本**：用生产凭据在本地运行 `pnpm exec tsx scripts/migrate-blob-to-kv.ts`（需要 `BLOB_PRIVATE_READ_WRITE_TOKEN`、ImgBed 变量，以及 `CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` / `CF_API_TOKEN`；并设置 `APP_ENV=production` 与 `GITHUB_REPOSITORY`）。脚本通过原始 HTTPS 读取旧 Blob 私有状态（不依赖 `@vercel/blob`），把旧草稿媒体上传到 ImgBed 并写入 Cloudflare KV，最后校验读回校验和；已有 KV 状态时拒绝覆盖。旧 Blob 备份对象不会被复制。
-2. **部署**：配置 Cloudflare KV 三件套与 ImgBed 变量后部署新版本。新版本运行时不再读取任何 Blob 变量。
-3. **验证**：登录后台，核对草稿、历史、会话、评论/友链审核、发布任务、备份索引与备份恢复；上传一张图片确认进入 ImgBed；创建并完成一次生产发布，检查 Git 提交、部署 SHA 与发布清单。
-4. **清理**：删除 Vercel 项目里的 `BLOB_PRIVATE_READ_WRITE_TOKEN`、`BLOB_PUBLIC_READ_WRITE_TOKEN` 及开发/预览 Blob token，删除旧 Blob store 与 `scripts/migrate-blob-to-kv.ts`。
-
-无法访问旧 Blob 凭据或迁移校验失败时必须阻断切换，不要直接部署，否则旧草稿与媒体记录会静默丢失。
+1. 删除 Vercel 项目里的 `CF_ACCOUNT_ID`、`CF_KV_NAMESPACE_ID`、`CF_API_TOKEN`（以及 `ADMIN_DEV_CF_*` / `ADMIN_PREVIEW_CF_*`）。残留不会改变行为，但会掩盖配置错误。
+2. 确认 `GITHUB_TOKEN`、`GITHUB_REPOSITORY`、`GITHUB_BRANCH` 已配置，且仓库里确实有文章与设置来源，否则后台会以 `BASELINE_CONFIGURATION_REQUIRED` / `REPOSITORY_POSTS_MISSING` 明确报错而不是显示空白。
+3. 旧 KV 里的私有草稿不会被自动迁移到 Git；如需保留，先在旧版本里导出，再在新版本中重新保存。旧命名空间确认无用后再删除。
 
 ## 验证步骤
 
 1. `pnpm build:vercel` 通过，产物含静态博客、`/admin/`、`/api/` 与 Workflow。
-2. 登录 `/admin/` 后获得服务端会话；错误密码被拒绝，写请求在缺少 CSRF 或跨源时失败。
-3. 生产环境缺少 `CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` / `CF_API_TOKEN` 时后台明确报配置错误，而不是静默使用内存；开发/预览未配置独立 KV 时使用内存存储且重启清空。
+2. 登录 `/admin/` 后获得服务端签名 Cookie 会话；错误密码被拒绝，写请求在缺少 CSRF 或跨源时失败。
+3. 未配置任何 KV 时后台正常启动，文章与设置直接从 Git 读取；配置残缺的 KV 三件套时报 `KV_CONFIGURATION_REQUIRED`，不会静默切换存储。
 4. 保存草稿、刷新页面后仍可读取；并发保存返回冲突而不是覆盖。
 5. 上传图片成功并返回 ImgBed HTTPS 地址；超过 4 MiB 的直接上传和外链导入超过 32 MiB 时报 413。
-6. 发布任务提交到 Git `master`，Workflow 核验生产域名、Git SHA 与发布清单；失败或结果未知时可核查。
+6. 发布任务提交到 Git `master`，核验生产域名、Git SHA 与发布清单；未配置 KV 时发布在同一请求内直接完成提交与核验，失败或结果未知时可核查。
 7. Cron 仅在生产以正确的 Bearer 密钥执行；维护与发布开关默认关闭。
-8. 创建备份后在 KV 中可见 `admin-backup:...` 对象，恢复前会校验站点、版本与校验和。
+8. 设置保存后可用 `POST /api/settings/commit` 立即提交回仓库，提交后基线同步推进，下一次发布不会误报外部改动。
 
 ## 回滚
 
-代码回滚使用新的 Git revert 提交并重新完整构建，不使用 force push 重写历史。Vercel 回滚代码不会自动回滚 Git 提交、KV 状态或 ImgBed 图片；回滚前先核对状态版本兼容性，必要时用迁移期备份恢复。套餐与额度见 [免费部署说明](./free-deployment.md)。
+代码回滚使用新的 Git revert 提交并重新完整构建，不使用 force push 重写历史。Vercel 回滚代码不会自动回滚 Git 提交或 ImgBed 图片；回滚前先核对内容与设置文件的兼容性。套餐与额度见 [免费部署说明](./free-deployment.md)。

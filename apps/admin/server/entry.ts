@@ -70,7 +70,7 @@ export function registerEntryRoutes(app: AdminApp, suppliedStore?: FileStore) {
 			throw new ApiFailure(401, "ENTRY_PASSWORD_INCORRECT", "密码不正确，请重新输入");
 		}
 		const entryToken = issueEntryToken();
-		const session = await issueSession(store, getSiteId(), getCookie(context, SESSION_COOKIE));
+		const session = issueSession();
 		setCookie(context, ENTRY_COOKIE, entryToken, { ...cookieOptions, maxAge: ENTRY_SECONDS });
 		setCookie(context, SESSION_COOKIE, session.token, { ...cookieOptions, maxAge: SESSION_SECONDS });
 		return context.json({ data: { verified: true } });

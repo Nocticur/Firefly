@@ -4,9 +4,10 @@ import { start } from "workflow/api";
 import type { AdminApp } from "./types.js";
 import type { PostRecord, TaskRecord } from "../shared/contracts.js";
 import { getStore, getSiteId, collection, assertSite, type FileStore, type StoreState } from "./file-store.js";
+import { storageConfig } from "./storage-config.js";
 import { ApiFailure, requireProduction, readJson } from "./security.js";
 import { serviceEnabled } from "./service-settings.js";
-import { githubProvider, GitHubError, type GitHubProvider, type RepositoryFile } from "./github.js";
+import { githubProvider, GitHubError, personalToken, type GitHubProvider, type RepositoryFile } from "./github.js";
 import { assertDeploymentConfigRedirects, buildDeploymentConfig, canonicalJson, publicContentDigest, publicSettings, publishedSource, sha256, type PublishedPost, type Redirect } from "./release-format.js";
 import { publishWorkflow } from "../workflows/publish.js";
 import { requireAdmin } from "./auth.js";
@@ -38,9 +39,14 @@ function replaceMedia(value: unknown, urls: Record<string, string>): unknown {
 const terminalStates = new Set(["verified", "failed", "conflict"]);
 export async function assertPublishCapability(): Promise<void> {
 	requireProduction(await serviceEnabled("publish"));
-	for (const name of ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "VERCEL_TOKEN"]) {
-		if (!process.env[name]) throw new ApiFailure(503, "PUBLISH_CONFIGURATION_REQUIRED", `缺少 ${name}`);
+	// A personal access token is enough on its own; the App credentials are only
+	// required when no PAT is configured.
+	if (!personalToken()) {
+		for (const name of ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"]) {
+			if (!process.env[name]) throw new ApiFailure(503, "PUBLISH_CONFIGURATION_REQUIRED", `缺少 GITHUB_TOKEN 或 ${name}`);
+		}
 	}
+	if (!process.env.VERCEL_TOKEN) throw new ApiFailure(503, "PUBLISH_CONFIGURATION_REQUIRED", "缺少 VERCEL_TOKEN");
 	if (!vercelProjectId()) throw new ApiFailure(503, "PUBLISH_CONFIGURATION_REQUIRED", "无法识别当前 Vercel 项目，请检查系统变量");
 }
 export function taskRecord(row: Row): TaskRecord {
@@ -400,7 +406,16 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 		await store.update((state) => { assertSite(state, site); const lock = collection(state, "release_locks")[site]; if (lock?.task_id === id && lock.fencing_token === fence) lock.lease_until = new Date().toISOString(); });
 	}
 }
+/**
+ * Without a shared store there is no way to hand a task to a workflow that runs in a
+ * different function instance: the in-process store dies with the request. In that case
+ * the release runs inline, which keeps publishing working without any database.
+ */
 export async function scheduleReleaseTask(id: string): Promise<void> {
+	if (!storageConfig()) {
+		await processReleaseTask(id);
+		return;
+	}
 	const run = await start(publishWorkflow, [id]);
 	await getStore().update((state) => { const task = collection(state, "release_tasks")[id]; if (task) { task.workflow_id = run.runId; task.updated_at = new Date().toISOString(); } });
 }

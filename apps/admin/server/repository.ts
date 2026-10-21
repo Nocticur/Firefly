@@ -4,6 +4,7 @@ import { assertSite, collection, type FileStore, type Row } from "./file-store.j
 import { ApiFailure, digest } from "./security.js";
 import { validatePostSource } from "./source-document.js";
 import { readRepositoryFiles } from "./github.js";
+import { deriveManagedSettings, MANAGED_SETTINGS_PATH } from "./managed-settings.js";
 
 type SourceFile = { path: string; source: string };
 type RepositoryReader = (sha?: string) => Promise<Awaited<ReturnType<typeof readRepositoryFiles>>>;
@@ -30,11 +31,14 @@ export async function importRepository(store: FileStore, siteId: string, reader:
 	const files: SourceFile[] = repository.files;
 	const publishedState = repository.publishedState || readJsonFile(files, "src/data/published-state.json");
 	const mapping: PublishedPost[] = isRecord(publishedState) && Array.isArray(publishedState.posts) ? publishedState.posts.filter(isRecord) as PublishedPost[] : [];
-	const managed = readJsonFile(files, "src/data/managed-settings.json");
+	const managed = deriveManagedSettings(files);
 	const redirects = readJsonFile(files, "src/data/redirects.json");
 	const deploymentConfig = readJsonFile(files, "vercel.json");
 	if (deploymentConfig !== undefined && (!isRecord(deploymentConfig) || deploymentConfig.redirects !== undefined && !Array.isArray(deploymentConfig.redirects))) throw new ApiFailure(422, "REPOSITORY_CONFIGURATION_INVALID", "GitHub vercel.json 必须为包含有效重定向规则的 JSON 对象");
-	if (!isRecord(managed) || !isRecord(managed.settings) || !isRecord(managed.navigation)) throw new ApiFailure(503, "BASELINE_CONFIGURATION_REQUIRED", "仓库须包含 src/data/managed-settings.json 的真实 settings/navigation 基线；不能用空配置替换主题");
+	// A repository that stores neither file must not silently import empty settings,
+	// which would blank out the theme's real configuration.
+	const derivedLinks = Array.isArray(managed.navigation.links) ? managed.navigation.links : [];
+	if (!Object.keys(managed.settings).length && !derivedLinks.length) throw new ApiFailure(503, "BASELINE_CONFIGURATION_REQUIRED", `仓库须包含 ${MANAGED_SETTINGS_PATH} 或可解析的 src/config/siteConfig.ts；不能用空配置替换主题`);
 	const posts = files.filter((file) => /^src\/content\/posts\/.+\.(md|mdx)$/.test(file.path));
 	if (!posts.length) throw new ApiFailure(422, "REPOSITORY_POSTS_MISSING", "GitHub 仓库没有读取到文章源码");
 	return store.update((state) => {
@@ -64,14 +68,31 @@ export async function importRepository(store: FileStore, siteId: string, reader:
 		const now = new Date().toISOString();
 		for (const kind of ["settings", "navigation"] as const) entities[`${kind}:default`] = { id: "default", kind, data: managed[kind], revision: 1, created_at: now, updated_at: now };
 		if (isRecord(managed.icons)) entities["icons:default"] = { id: "default", kind: "icons", data: managed.icons, revision: 1, created_at: now, updated_at: now };
-		const baseline = { headSha: repository.headSha, repositoryFiles: files, snapshotId: isRecord(publishedState) ? publishedState.snapshotId || null : null, importedAt: new Date().toISOString(), importedPosts: posts.length, publishedSettings: managed.settings, publishedNavigation: managed.navigation, publishedIcons: managed.icons || {}, publishedState: publishedState || null, posts: mapping, redirects: Array.isArray(redirects) ? redirects : [], ...(deploymentConfig !== undefined ? { deploymentConfig } : {}) };
+		const baseline = { headSha: repository.headSha, repositoryFiles: files, snapshotId: isRecord(publishedState) ? publishedState.snapshotId || null : null, importedAt: new Date().toISOString(), importedPosts: posts.length, publishedSettings: managed.settings, publishedNavigation: managed.navigation, publishedIcons: managed.icons || {}, settingsSource: managed.source, publishedState: publishedState || null, posts: mapping, redirects: Array.isArray(redirects) ? redirects : [], ...(deploymentConfig !== undefined ? { deploymentConfig } : {}) };
 		entities["repository:baseline"] = { id: "baseline", kind: "repository", data: baseline, revision: 1, created_at: now, updated_at: now };
 		return { imported: true, headSha: repository.headSha, records: posts.length, publicPosts: posts.filter((file) => validatePostSource(file.source).draft !== true).length };
 	});
 }
 
 export type RepositoryDifference = { path: string; expectedSource: string | null; remoteSource: string | null; expectedSha256: string | null; remoteSha256: string | null };
-export function compareRepositoryFiles(expected: SourceFile[], remote: SourceFile[]): RepositoryDifference[] {
+
+/**
+ * The admin console reads content from the Git repository. A fresh deployment starts
+ * with empty state, so the first authorized read primes it from the repository rather
+ * than rendering a blank console. Import is idempotent and never overwrites drafts.
+ */
+let priming: Promise<unknown> | null = null;
+export async function ensureBaseline(store: FileStore, siteId: string): Promise<void> {
+	try {
+		if (collection(await store.read(), "entities")["repository:baseline"]) return;
+	} catch { return; }
+	if (priming) { await priming.catch(() => undefined); return; }
+	priming = importRepository(store, siteId).catch((error) => {
+		console.error("[admin] repository baseline import failed:", error instanceof Error ? error.message : error);
+		return undefined;
+	});
+	try { await priming; } finally { priming = null; }
+}export function compareRepositoryFiles(expected: SourceFile[], remote: SourceFile[]): RepositoryDifference[] {
 	const before = new Map(expected.map((file) => [file.path, file.source])); const after = new Map(remote.map((file) => [file.path, file.source]));
 	return [...new Set([...before.keys(), ...after.keys()])].sort().filter((path) => before.get(path) !== after.get(path)).map((path) => {
 		const expectedSource = before.get(path) ?? null; const remoteSource = after.get(path) ?? null;

@@ -1,6 +1,6 @@
 # 环境变量
 
-博客、`/admin/` 和 `/api/` 部署在同一个 Vercel `firefly` 项目。后台私有状态与备份存 **Cloudflare KV**（REST API），图片走 CloudFlare-ImgBed；不需要数据库连接、建表或 SQL 迁移，也不使用 Vercel Blob 或 Upstash。
+博客、`/admin/` 和 `/api/` 部署在同一个 Vercel `firefly` 项目。**Git 仓库是唯一数据源**：文章与站点设置都从仓库读取并写回仓库，图片走 CloudFlare-ImgBed。不需要数据库、建表或 SQL 迁移，也不需要 Cloudflare KV、Vercel Blob 或 Upstash。
 
 变量在 Vercel 项目 **Settings → Environment Variables** 中配置。生产 Secret 只勾选 **Production**；Vercel 需开启 **Enable access to System Environment Variables**，否则读不到平台注入的地址与项目编号。
 
@@ -9,31 +9,38 @@
 | 变量 | 填什么 | 用途 |
 | --- | --- | --- |
 | `ADMIN_ENTRY_PASSWORD` | 自己设置的 3～10 个字符密码，建议 10 位随机字符；设为 **Secret** | 后台登录；服务端自动加盐 scrypt 哈希后核对 |
-| `CF_ACCOUNT_ID` | Cloudflare 账户 ID（32 位十六进制） | 账户标识；也接受 `CLOUDFLARE_ACCOUNT_ID` 别名 |
-| `CF_KV_NAMESPACE_ID` | Cloudflare KV 命名空间 ID（32 位十六进制） | KV 命名空间；也接受 `CLOUDFLARE_KV_NAMESPACE_ID` 别名 |
-| `CF_API_TOKEN` | Cloudflare API Token，权限至少 **Workers KV Storage:Edit**；设为 **Secret** | 读写 KV；也接受 `CLOUDFLARE_API_TOKEN` 别名 |
+| `GITHUB_TOKEN` | GitHub **细粒度个人访问令牌**（Fine-grained PAT）；设为 **Secret** | 读写仓库里的文章与设置 |
+| `GITHUB_REPOSITORY` | 目标仓库，例如 `Nocticur/blog` | 数据源仓库；不填时默认 `Nocticur/Firefly` |
+| `GITHUB_BRANCH` | 目标分支，例如 `master` | 读写分支；不填时默认 `master` |
 | `IMGBED_API_TOKEN` | CloudFlare-ImgBed API Token；使用媒体库时必填，设为 **Secret** | 服务端上传图片到图床 |
 | `IMGBED_BASE_URL` | 可选，默认 `https://image.nocticur.eu.cc` | 图床地址；只有地址改变时才填 |
 
-Cloudflare KV 是唯一后端，三项 `CF_*` 要么全部配置，要么全部不配置；只配一部分会明确报 `KV_CONFIGURATION_REQUIRED`。
+`GITHUB_TOKEN` 的权限：**Contents = Read and write**（提交文章与设置）、**Metadata = Read**（GitHub 强制要求）。令牌只授权目标仓库，不要授权全部仓库。
 
-生产缺少 Cloudflare KV 时后台明确报配置错误并拒绝保存，不会回退到内存或临时磁盘。首次写入自动创建状态文档，无需初始化。
+`ADMIN_SESSION_SECRET` 可选，至少 32 字符；不填时由 `ADMIN_ENTRY_PASSWORD` 派生。更换密码即让所有旧登录会话失效。
 
-> Cloudflare KV 是最终一致、无原子 CAS、同 key 约 1 次/秒写入；并发写可能后写覆盖、跨区域可能短暂读到旧值。后台按单人管理场景处理：保存时校验修订号与内容摘要，冲突返回 `409` 并提示刷新后重新编辑，不做分布式锁，也不声称强一致。
+不需要初始化：后台首次打开会自动从仓库导入现有文章与设置，因此不会显示空白。仓库既没有 `src/data/managed-settings.json` 也没有 `src/config/siteConfig.ts` 时会明确报 `BASELINE_CONFIGURATION_REQUIRED`，不会用空配置覆盖主题。
+
+> 后台按单人管理场景处理：保存时校验修订号，冲突返回 `409` 并提示刷新后重新编辑，不做分布式锁。Git 提交失败或并发冲突时不会覆盖远端内容。
 
 ## 发布与仓库
 
 | 变量 | 必填 | 说明 |
 | --- | --- | --- |
-| `GITHUB_APP_ID` | 发布/导入时 | GitHub App 编号，只安装到 `Nocticur/Firefly` |
-| `GITHUB_APP_PRIVATE_KEY` | 发布/导入时 | App 私钥完整 PEM；设为 **Secret**；换行可写成 `\n` |
-| `GITHUB_INSTALLATION_ID` | 可选 | 不填时由目标仓库接口自动查询 |
+| `GITHUB_TOKEN` | 发布/导入时 | 见上表；读写目标仓库 |
+| `GITHUB_REPOSITORY` | 可选 | 默认 `Nocticur/Firefly` |
+| `GITHUB_BRANCH` | 可选 | 默认 `master` |
 | `VERCEL_TOKEN` | 生产发布核验时必填 | Vercel Token，选择当前项目团队作用域；设为 **Secret** |
 | `VERCEL_PROJECT_ID` | 可选 | Vercel 自动提供；也接受 `VERCEL_BLOG_PROJECT_ID` |
 | `VERCEL_TEAM_ID` | 可选 | 团队作用域标识，仅有团队项目时需要 |
 | `VERCEL_AUTOMATION_BYPASS_SECRET` | 可选 | 生产域名启用 Deployment Protection 时，发布核验用它读取受保护清单 |
 
-App 权限：Contents read/write、Metadata read。服务密钥不能填写到公开 JSON、文章、后台表单或 Git；后台只保存服务开关状态，不接收密钥。
+GitHub App（`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALLATION_ID`）只在没有 `GITHUB_TOKEN` 时作为回退，通常不需要配置。服务密钥不能填写到公开 JSON、文章、后台表单或 Git；后台只保存服务开关状态，不接收密钥。
+
+## 设置与导航的存放位置
+
+- 站点设置、导航、图标统一写入 `src/data/managed-settings.json`，博客构建时由 `src/utils/managed-settings.ts` 读入并覆盖 `src/config` 的默认值。
+- 仓库里还没有这个文件时，后台会从 `src/config/siteConfig.ts` 的 `title`、`subtitle`、`site_url`、`description`、`siteStartDate`、`timezone`、`navbar.logo.value` 以及 `pages.*` 开关推导出初始值，首次保存后即写入该文件。
 
 ## 互动
 
@@ -63,10 +70,8 @@ App 权限：Contents read/write、Metadata read。服务密钥不能填写到�
 | `PUBLIC_DEV_ORIGIN` | `http://localhost:4321` | 开发时博客源 |
 | `ADMIN_PREVIEW_ORIGIN` | 平台 `VERCEL_URL` | 预览环境管理源覆盖 |
 | `PUBLIC_PREVIEW_ORIGIN` | 平台 `VERCEL_URL` | 预览环境博客源覆盖 |
-| `ADMIN_DEV_CF_ACCOUNT_ID` / `ADMIN_DEV_CF_KV_NAMESPACE_ID` / `ADMIN_DEV_CF_API_TOKEN` | 不填用内存存储 | 开发环境独立 Cloudflare KV |
-| `ADMIN_PREVIEW_CF_ACCOUNT_ID` / `ADMIN_PREVIEW_CF_KV_NAMESPACE_ID` / `ADMIN_PREVIEW_CF_API_TOKEN` | 不填用内存存储 | 预览环境独立 Cloudflare KV |
 
-开发/预览未配置独立 KV 时使用内存存储，重启清空；两者都必须与生产 KV 不同（比较账户 ID 与命名空间 ID），否则后台拒绝启动。每个非生产环境还需自己的后台密码与第三方服务凭据。本地默认 `development`，不需要 `APP_ENV`。
+开发/预览默认不需要任何存储配置：文章与设置照常从 Git 读取。若显式配置了独立 Cloudflare KV（`ADMIN_DEV_CF_*` / `ADMIN_PREVIEW_CF_*`），它必须与生产 KV 不同（比较账户 ID 与命名空间 ID），否则后台拒绝启动。每个非生产环境还需自己的后台密码与第三方服务凭据。本地默认 `development`，不需要 `APP_ENV`。
 
 ## Vercel 自动提供，不要手填
 
@@ -74,12 +79,13 @@ App 权限：Contents read/write、Metadata read。服务密钥不能填写到�
 
 `VERCEL_ENV`、`VERCEL_URL`、`VERCEL_PROJECT_PRODUCTION_URL`、`VERCEL_PROJECT_ID`、`VERCEL_GIT_COMMIT_SHA`、`VERCEL`。
 
-`GITHUB_REPOSITORY` 默认 `Nocticur/Firefly`，只有改仓库名时才需要填写；它也参与 `siteId`，改动会指向新的 KV key。
+`GITHUB_REPOSITORY` 与 `GITHUB_BRANCH` 决定读写哪个仓库的哪个分支；`GITHUB_REPOSITORY` 默认 `Nocticur/Firefly`，`GITHUB_BRANCH` 默认 `master`。
 
 ## 必须删除的旧变量
 
 - `BLOB_PRIVATE_READ_WRITE_TOKEN`、`BLOB_PUBLIC_READ_WRITE_TOKEN`
 - `ADMIN_DEV_PRIVATE_BLOB_TOKEN`、`ADMIN_PREVIEW_PRIVATE_BLOB_TOKEN`
+- `CF_ACCOUNT_ID`、`CF_KV_NAMESPACE_ID`、`CF_API_TOKEN`（已不再需要数据库）
 - `KV_PROVIDER`、`KV_REST_API_URL`、`KV_REST_API_TOKEN`
 - `UPSTASH_REDIS_REST_URL`、`UPSTASH_REDIS_REST_TOKEN`、`ADMIN_DEV_KV_REST_API_*`、`ADMIN_PREVIEW_KV_REST_API_*`
 - `ADMIN_ORIGIN`、`PUBLIC_SITE_ORIGIN`（已改为读取 Vercel 项目地址）
@@ -87,19 +93,28 @@ App 权限：Contents read/write、Metadata read。服务密钥不能填写到�
 
 以上变量在运行时不再被读取，残留不会改变行为；保留它们只会掩盖配置错误，应尽快清理。
 
-旧 Vercel Blob 里如果还有历史草稿或媒体，切换前用一次性脚本 `pnpm exec tsx scripts/migrate-blob-to-kv.ts` 迁移（需要 `BLOB_PRIVATE_READ_WRITE_TOKEN`、ImgBed 变量与 Cloudflare 三件套，并设置 `APP_ENV=production`、`GITHUB_REPOSITORY`）。脚本只走原始 HTTPS，不依赖 `@vercel/blob`，把旧草稿媒体上传到 ImgBed 并写入 Cloudflare KV 后再校验读回校验和；如果 KV 已有状态则拒绝覆盖。迁移校验通过后删除脚本与 `BLOB_PRIVATE_READ_WRITE_TOKEN`，线上运行时不访问 Blob。
+## 数据存放位置
 
-## KV 的定位
+**Git 仓库是唯一数据源**，没有数据库、键值存储或迁移命令：
 
-Cloudflare KV 在这里只当键值存储使用，**不是关系型数据库**：没有表、索引、SQL、连接池或迁移命令。后台把整个状态文档 JSON 压缩后写入 `admin-state:<sha256(siteId)>:data`；KV 没有原子 CAS，只能读后写并在写入前比较内容摘要与修订号。备份是 `admin-backup:<sha256(siteId)>:<sha256(backupId)>:<checksum>` 的不可变对象，写入后回读校验 SHA-256。状态文档解码后上限 16 MiB、编码后上限 8 MiB，单个备份上限 8 MiB；达到上限会返回 `507` 并拒绝写入，应清理历史而不是升级套餐。
+- 文章：`src/content/posts/**/*.md|mdx`，由后台直接读写并提交。
+- 站点设置、导航、图标：`src/data/managed-settings.json`。
+- 发布清单：`src/data/published-state.json`；重定向：`src/data/redirects.json`。
+- 评论、友链、访客封禁等少量运行时写入保存在后台状态中；未配置 Cloudflare KV 时使用进程内存，重启即清空。
+
+后台首次打开会自动导入仓库现有文章与设置，不需要手动初始化。保存设置或发布时后台以最新提交为基准生成一次提交；远端已被他人改动时返回冲突而不是覆盖。
+
+保存设置有两种方式：`PUT /api/{settings,navigation,icons}` 只写入后台草稿，`POST /api/{settings,navigation,icons}/commit` 会立即把当前设置提交回仓库的 `src/data/managed-settings.json`（保留文件中后台不管理的其他字段，并同步推进基线，避免下次发布误判为外部改动）。
 
 ## 错误语义
 
 | 情况 | 返回 | 后台表现 |
 | --- | --- | --- |
-| 未配置或配置不完整 | `503 KV_CONFIGURATION_REQUIRED` | 明确提示补充 `CF_*` 变量 |
-| Cloudflare 请求失败或重试耗尽 | `503 KV_UNAVAILABLE` | 提示存储暂不可用、稍后重试 |
-| 环境隔离校验失败 | `503 KV_ENVIRONMENT_NOT_ISOLATED` | 拒绝启动，提示换用独立命名空间 |
+| 仓库缺少设置基线 | `503 BASELINE_CONFIGURATION_REQUIRED` | 提示仓库需包含 `src/data/managed-settings.json` 或可解析的 `src/config/siteConfig.ts` |
+| 仓库没有文章 | `422 REPOSITORY_POSTS_MISSING` | 提示仓库里没有可导入的文章源码 |
+| 未配置 GitHub 凭据 | `503 GITHUB_APP_CONFIGURATION_REQUIRED` | 提示补充 `GITHUB_TOKEN` |
+| 发布缺少 Vercel 凭据 | `503 PUBLISH_CONFIGURATION_REQUIRED` | 提示补充 `VERCEL_TOKEN` 或核对当前 Vercel 项目 |
+| 仓库不可访问或无权限 | `503 GITHUB_REPOSITORY_UNAVAILABLE` | 提示检查令牌权限与仓库名 |
 | 修订号/摘要冲突 | `409 FILE_STORE_CONFLICT` | 提示刷新后重新编辑，不覆盖服务器版本 |
 | 状态或备份过大 | `507 FILE_STORE_TOO_LARGE` | 提示清理历史或减少媒体记录 |
 | 状态内容损坏 | `503 FILE_STORE_INVALID` | 停止写入，需从备份恢复 |

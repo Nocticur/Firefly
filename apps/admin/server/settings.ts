@@ -1,8 +1,13 @@
 import type { AdminApp } from "./types.js";
+import { randomUUID } from "node:crypto";
 import { requireAdmin } from "./auth.js";
 import { assertSite, collection, getStore, getSiteId, type FileStore } from "./file-store.js";
 import { ApiFailure, expectedRevision, readJson } from "./security.js";
+import { sha256 } from "./release-format.js";
 import { readServiceSettings, saveServiceSettings } from "./service-settings.js";
+import { ensureBaseline } from "./repository.js";
+import { githubProvider, readRepositoryFiles, type GitHubProvider } from "./github.js";
+import { MANAGED_SETTINGS_PATH } from "./managed-settings.js";
 
 export const MANAGED_SETTING_KEYS = ["title", "subtitle", "description", "siteUrl", "siteStartDate", "timezone", "profileName", "bio", "avatar", "contactLinks", "homeCover", "defaultCover", "background"] as const;
 const keySet = new Set<string>(MANAGED_SETTING_KEYS);
@@ -97,6 +102,61 @@ export async function saveManagedEntity(store: FileStore, siteId: string, kind: 
 		return { data, revision: expected + 1 };
 	});
 }
+/**
+ * Save then commit straight to the configured branch, so the blog picks the change up on
+ * its next build without needing a full release. The commit is rebased on the branch head
+ * we just read, and a concurrent external push refuses rather than overwriting.
+ */
+export interface ManagedCommitDependencies {
+	readRepository?: typeof readRepositoryFiles;
+	commit?: GitHubProvider["commit"];
+}
+export async function commitManagedEntity(store: FileStore, siteId: string, kind: "settings" | "navigation" | "icons", patch: Record<string, unknown>, expected: number, dependencies: ManagedCommitDependencies = {}) {
+	const read = dependencies.readRepository ?? readRepositoryFiles;
+	const commit = dependencies.commit ?? githubProvider.commit.bind(githubProvider);
+	const saved = await saveManagedEntity(store, siteId, kind, patch, expected);
+	const state = await store.read(); assertSite(state, siteId);
+	const readCurrent = (name: string) => (collection(state, "entities")[`${name}:default`] as SettingsRow | undefined)?.data;
+	const document = {
+		schemaVersion: 1,
+		settings: readCurrent("settings") ?? {},
+		navigation: readCurrent("navigation") ?? { links: [] },
+		icons: readCurrent("icons") ?? {},
+	};
+	const repository = await read();
+	// Replacing the file wholesale would drop any field this admin does not manage.
+	const existing = repository.files.find((file) => file.path === MANAGED_SETTINGS_PATH);
+	let merged: Record<string, unknown> = document;
+	if (existing) {
+		try {
+			const parsed: unknown = JSON.parse(existing.source);
+			if (isRecord(parsed)) merged = { ...parsed, ...document };
+		} catch { /* A corrupt file is replaced by the managed document. */ }
+	}
+	const source = `${JSON.stringify(merged, null, 2)}\n`;
+	const digest = sha256(source);
+	const taskId = randomUUID();
+	const targetSha = await commit({
+		baseSha: repository.headSha,
+		taskId,
+		digest,
+		files: [{ path: MANAGED_SETTINGS_PATH, source }],
+		deletions: [],
+	});
+	// Advance the baseline past our own commit, otherwise the next release would mistake
+	// this write for an external modification and refuse to publish.
+	await store.update((next) => {
+		assertSite(next, siteId);
+		const baseline = collection(next, "entities")["repository:baseline"];
+		const data = baseline?.data as Record<string, unknown> | undefined;
+		if (!baseline || !data || data.headSha !== repository.headSha) return;
+		const files = Array.isArray(data.repositoryFiles) ? (data.repositoryFiles as Array<{ path: string; source: string }>) : [];
+		const updated = files.filter((file) => file.path !== MANAGED_SETTINGS_PATH).concat({ path: MANAGED_SETTINGS_PATH, source });
+		baseline.data = { ...data, headSha: targetSha, repositoryFiles: updated, synchronizedAt: new Date().toISOString() };
+		baseline.updated_at = new Date().toISOString();
+	});
+	return { ...saved, committedSha: targetSha };
+}
 export function registerSettingsRoutes(app: AdminApp) {
 	app.get("/api/service-settings", requireAdmin, async (context) => context.json(await readServiceSettings()));
 	app.put("/api/service-settings", requireAdmin, async (context) => {
@@ -104,11 +164,22 @@ export function registerSettingsRoutes(app: AdminApp) {
 		return context.json(await saveServiceSettings(getStore(), getSiteId(), body.data, expectedRevision(body.expectedRevision)));
 	});
 	for (const kind of ["settings", "navigation", "icons"] as const) {
-		app.get(`/api/${kind}`, requireAdmin, async (context) => context.json(await getManagedEntity(getStore(), getSiteId(), kind)));
+		app.get(`/api/${kind}`, requireAdmin, async (context) => {
+			await ensureBaseline(getStore(), getSiteId());
+			return context.json(await getManagedEntity(getStore(), getSiteId(), kind));
+		});
 		app.put(`/api/${kind}`, requireAdmin, async (context) => {
 			const body = await readJson(context.req.raw, 128 * 1024);
 			if (!isRecord(body.data)) throw new ApiFailure(422, "SETTING_DATA_REQUIRED", "必须提供 data 对象");
 			return context.json(await saveManagedEntity(getStore(), getSiteId(), kind, body.data, expectedRevision(body.expectedRevision)));
+		});
+		// Explicitly persist the saved configuration into the repository.
+		app.post(`/api/${kind}/commit`, requireAdmin, async (context) => {
+			await ensureBaseline(getStore(), getSiteId());
+			const body = await readJson(context.req.raw, 128 * 1024);
+			const current = await getManagedEntity(getStore(), getSiteId(), kind);
+			const patch = isRecord(body.data) ? body.data : {};
+			return context.json({ data: await commitManagedEntity(getStore(), getSiteId(), kind, patch, expectedRevision(body.expectedRevision ?? current.revision)) });
 		});
 	}
 }

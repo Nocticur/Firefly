@@ -111,8 +111,9 @@ test("file store retries after a Cloudflare etag conflict", async () => {
 	assert.equal(putCount, 2);
 });
 
-test("production requires Cloudflare KV and ignores old Upstash variables", async () => {
-	await withEnv({ APP_ENV: "production", VERCEL_ENV: undefined, CF_ACCOUNT_ID: undefined, CF_KV_NAMESPACE_ID: undefined, CF_API_TOKEN: undefined, KV_REST_API_URL: "https://legacy.invalid", KV_REST_API_TOKEN: "legacy" }, () => assert.throws(() => storageConfig(), failure("KV_CONFIGURATION_REQUIRED", 503)));
+test("production treats Cloudflare KV as optional and ignores old Upstash variables", async () => {
+	// Git is the source of truth now, so an unconfigured production deployment must still boot.
+	await withEnv({ APP_ENV: "production", VERCEL_ENV: undefined, CF_ACCOUNT_ID: undefined, CF_KV_NAMESPACE_ID: undefined, CF_API_TOKEN: undefined, KV_REST_API_URL: "https://legacy.invalid", KV_REST_API_TOKEN: "legacy" }, () => assert.equal(storageConfig(), null));
 	await withEnv({ APP_ENV: "production", VERCEL_ENV: undefined, CF_ACCOUNT_ID: config.accountId, CF_KV_NAMESPACE_ID: config.namespaceId, CF_API_TOKEN: config.token, KV_REST_API_URL: "https://legacy.invalid", KV_REST_API_TOKEN: "legacy" }, () => assert.equal(storageConfig()?.provider, "cloudflare"));
 });
 

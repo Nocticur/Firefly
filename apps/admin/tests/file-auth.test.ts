@@ -8,7 +8,7 @@ import {
 } from "../server/file-store.js";
 import { registerAuthRoutes } from "../server/auth.js";
 import { consumeLoginAllowance } from "../server/login-rate.js";
-import { issueSession } from "../server/session.js";
+import { issueSession, PASSWORD_ADMIN_ID, verifySessionToken } from "../server/session.js";
 import { ApiFailure } from "../server/security.js";
 import type { AppEnv } from "../server/types.js";
 
@@ -87,7 +87,8 @@ test("file-backed login checks password, restores session and revokes logout wit
 				).status,
 				403,
 			);
-		assert.equal(
+		// Stateless sessions cannot be revoked server-side, so logout clears the cookie.
+		assert.match(
 			(
 				await app.request(`${origin}/api/auth/logout`, {
 					method: "POST",
@@ -97,14 +98,11 @@ test("file-backed login checks password, restores session and revokes logout wit
 						"x-csrf-token": session.csrfToken,
 					},
 				})
-			).status,
-			200,
+			).headers.get("set-cookie") || "",
+			/__Host-admin-session=;.*Max-Age=0/i,
 		);
-		assert.equal(
-			(await app.request(`${origin}/api/auth/session`, { headers: { cookie } }))
-				.status,
-			401,
-		);
+		// The signed token stays cryptographically valid, but logout removes it from
+		// the browser; rotating ADMIN_ENTRY_PASSWORD invalidates every prior session.
 		assert.equal(
 			Object.keys(collection(await store.read(), "sessions")).length,
 			0,
@@ -115,13 +113,14 @@ test("file-backed login checks password, restores session and revokes logout wit
 			else process.env[key] = previous[key];
 	}
 });
-test("file sessions rotate prior tokens atomically and have a bounded expiry", async () => {
-	const store = createMemoryStore("tests/sessions:development");
-	const first = await issueSession(store, "tests/sessions:development");
-	await issueSession(store, "tests/sessions:development", first.token);
-	const rows = Object.values(collection(await store.read(), "sessions"));
-	assert.equal(rows.length, 1);
-	assert.ok(new Date(String(rows[0].expires_at)).getTime() > Date.now());
+test("stateless sessions are signed, self-describing, and reject tampering", () => {
+	const first = issueSession();
+	assert.ok(first.token.includes("."));
+	const verified = verifySessionToken(first.token);
+	assert.equal(verified.user.id, PASSWORD_ADMIN_ID);
+	assert.ok(verified.expiresAt > Date.now());
+	// No session table is involved, so a stateless deployment needs no database.
+	assert.throws(() => verifySessionToken(`${first.token}x`), /SESSION_INVALID|会话/);
 });
 test("concurrent file login attempts preserve per-client quotas", async () => {
 	const previous = {

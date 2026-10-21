@@ -50,7 +50,7 @@ function appFor(store: FileStore): Hono<AppEnv> {
 async function authenticatedStore(): Promise<{ store: FileStore; site: string; session: Session }> {
 	const selectedSite = getSiteId();
 	const store = createMemoryStore(selectedSite);
-	const session = await issueSession(store, selectedSite);
+	const session = issueSession();
 	return { store, site: selectedSite, session };
 }
 

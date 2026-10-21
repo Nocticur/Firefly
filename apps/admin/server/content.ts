@@ -5,7 +5,8 @@ import { requireAdmin } from "./auth.js";
 import { assertSite, collection, getStore, getSiteId, type FileStore, type StoreState } from "./file-store.js";
 import { ApiFailure, expectedRevision, readJson } from "./security.js";
 import { patchMetadata, validatePostSource } from "./source-document.js";
-import { importRepository } from "./repository.js";
+import { ensureBaseline, importRepository } from "./repository.js";
+export { ensureBaseline } from "./repository.js";
 
 type PostRow = Record<string, unknown> & { id: string; data: PostRecord; revision: string | number; updated_at: Date | string };
 export type PostVersion = { id: string; postId: string; source: string; revision: number; createdAt: string; reason: string };
@@ -73,6 +74,7 @@ export async function restorePostVersion(store: FileStore, siteId: string, id: s
 
 export function registerContentRoutes(app: AdminApp) {
 	app.get("/api/posts", requireAdmin, async (context) => {
+		await ensureBaseline(getStore(), getSiteId());
 		const state = await getStore().read(); assertSite(state, getSiteId());
 		const rows = Object.values(collection(state, "entities")).filter(row => row.kind === "post").sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)) || String(a.id).localeCompare(String(b.id))) as PostRow[];
 		return context.json({ data: rows.map(postFromRow) });
