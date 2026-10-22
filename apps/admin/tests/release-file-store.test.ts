@@ -198,3 +198,23 @@ test("flat-file release tasks preserve snapshots and reconcile concurrent or unc
 			assert.deepEqual(result, { done: false, state: "queued" });
 		});
 });
+
+test("a verified publish drops the local version copies it already committed", async () => {
+	const site = `tests/releases-${randomUUID()}:development`;
+	const store = createMemoryStore(site);
+	const published = await seed(store, site);
+	const edit = await savePost(store, site, published.id, source.replace("Original HTML", "Edited before publish"), 1);
+	const untouched = await createPost(store, site, source.replace('title: "Frozen"', 'title: "Untouched"'), "未发布文章");
+	await savePost(store, site, untouched.id, source.replace('title: "Frozen"', 'title: "Untouched"').replace("Original HTML", "Still a draft"), 1);
+	const versions = async () => Object.values(collection(await store.read(), "entities")).filter((row) => row.kind === "post_version");
+	assert.equal((await versions()).length, 2);
+
+	const release = await freezeRelease(input(published.id, edit.revision), store, site);
+	assert.equal((await processReleaseTask(release.id, { store, site, github: github(), deployment: verified, skipCapabilityCheck: true, afterVerified: noNotification })).state, "verified");
+
+	const remaining = await versions();
+	// The published post's history is now redundant with Git; the unpublished draft keeps its own.
+	assert.equal(remaining.length, 1);
+	assert.equal((remaining[0].data as Row).postId, untouched.id);
+	assert.equal((await getPost(store, site, published.id)).source, edit.source);
+});

@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | `ADMIN_ENTRY_PASSWORD` | 自己设置的 3～10 个字符密码，建议 10 位随机字符；设为 **Secret** | 后台登录；服务端自动加盐 scrypt 哈希后核对 |
 | `GITHUB_TOKEN` | GitHub **细粒度个人访问令牌**（Fine-grained PAT）；设为 **Secret** | 读写仓库里的文章与设置 |
-| `GITHUB_REPOSITORY` | 目标仓库，例如 `Nocticur/blog` | 数据源仓库；不填时默认 `Nocticur/Firefly` |
+| `GITHUB_REPOSITORY` | 目标仓库；本项目为 `Nocticur/Firefly`，通常留空即用默认值 | 数据源仓库；不填时默认 `Nocticur/Firefly` |
 | `GITHUB_BRANCH` | 目标分支，例如 `master` | 读写分支；不填时默认 `master` |
 | `IMGBED_API_TOKEN` | CloudFlare-ImgBed API Token；使用媒体库时必填，设为 **Secret** | 服务端上传图片到图床 |
 | `IMGBED_BASE_URL` | 可选，默认 `https://image.nocticur.eu.cc` | 图床地址；只有地址改变时才填 |
@@ -27,7 +27,7 @@
 
 | 变量 | 必填 | 说明 |
 | --- | --- | --- |
-| `GITHUB_TOKEN` | 发布/导入时 | 见上表；读写目标仓库 |
+| `GITHUB_TOKEN` | 发布/导入时 | 见上表；读写目标仓库。生成地址 <https://github.com/settings/personal-access-tokens/new> |
 | `GITHUB_REPOSITORY` | 可选 | 默认 `Nocticur/Firefly` |
 | `GITHUB_BRANCH` | 可选 | 默认 `master` |
 | `VERCEL_TOKEN` | 生产发布核验时必填 | Vercel Token，选择当前项目团队作用域；设为 **Secret** |
@@ -35,7 +35,7 @@
 | `VERCEL_TEAM_ID` | 可选 | 团队作用域标识，仅有团队项目时需要 |
 | `VERCEL_AUTOMATION_BYPASS_SECRET` | 可选 | 生产域名启用 Deployment Protection 时，发布核验用它读取受保护清单 |
 
-GitHub App（`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALLATION_ID`）只在没有 `GITHUB_TOKEN` 时作为回退，通常不需要配置。服务密钥不能填写到公开 JSON、文章、后台表单或 Git；后台只保存服务开关状态，不接收密钥。
+GitHub App（`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALLATION_ID`）只在没有 `GITHUB_TOKEN` 时作为回退，那条路径要求 App 已安装到 `GITHUB_REPOSITORY` 指定的仓库。**推荐只配 PAT 并删除 App 变量**，避免走错分支。出现「GitHub 仓库暂时无法读取」时先用 `node scripts/check-github-access.mjs` 自检，按状态码排查见 [统一部署](./deployment.md#排查github-仓库暂时无法读取)。服务密钥不能填写到公开 JSON、文章、后台表单或 Git；后台只保存服务开关状态，不接收密钥。
 
 ## 设置与导航的存放位置
 
@@ -102,6 +102,17 @@ GitHub App（`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALLATION_I
 - 发布清单：`src/data/published-state.json`；重定向：`src/data/redirects.json`。
 - 评论、友链、访客封禁等少量运行时写入保存在后台状态中；未配置 Cloudflare KV 时使用进程内存，重启即清空。
 
+### 草稿与历史存在哪里
+
+草稿不会推进 Git，所以要有个地方存：
+
+| 配置 | 草稿 / 版本历史 / 评论 / 媒体记录 | 适合 |
+| --- | --- | --- |
+| 不配 KV | 进程内存，重启或多实例访问即丢 | 只用后台改文章并立即发布 |
+| 配了 Cloudflare KV（`CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` / `CF_API_TOKEN`） | 写入 KV，持久化 | 需要保留草稿与审核记录 |
+
+**发布核验通过后会自动清理**：该次发布涉及的已入库文章，其本地版本历史（`post_version:*`）会被删除，避免每保存一次就在状态文档里多留一份全文副本；未发布文章的历史不受影响。已发布的正文本身仍在 Git 里，不会因为这次清理而丢失。发布快照由每日维护按 30 天保留期回收。
+
 后台首次打开会自动导入仓库现有文章与设置，不需要手动初始化。保存设置或发布时后台以最新提交为基准生成一次提交；远端已被他人改动时返回冲突而不是覆盖。
 
 保存设置有两种方式：`PUT /api/{settings,navigation,icons}` 只写入后台草稿，`POST /api/{settings,navigation,icons}/commit` 会立即把当前设置提交回仓库的 `src/data/managed-settings.json`（保留文件中后台不管理的其他字段，并同步推进基线，避免下次发布误判为外部改动）。
@@ -114,7 +125,7 @@ GitHub App（`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALLATION_I
 | 仓库没有文章 | `422 REPOSITORY_POSTS_MISSING` | 提示仓库里没有可导入的文章源码 |
 | 未配置 GitHub 凭据 | `503 GITHUB_APP_CONFIGURATION_REQUIRED` | 提示补充 `GITHUB_TOKEN` |
 | 发布缺少 Vercel 凭据 | `503 PUBLISH_CONFIGURATION_REQUIRED` | 提示补充 `VERCEL_TOKEN` 或核对当前 Vercel 项目 |
-| 仓库不可访问或无权限 | `503 GITHUB_REPOSITORY_UNAVAILABLE` | 提示检查令牌权限与仓库名 |
+| 仓库不可访问或无权限 | `503 GITHUB_REPOSITORY_UNAVAILABLE` | 错误信息带仓库、分支与 HTTP 状态码；按状态码排查（401 令牌、403 权限、404 仓库/分支、0 网络） |
 | 修订号/摘要冲突 | `409 FILE_STORE_CONFLICT` | 提示刷新后重新编辑，不覆盖服务器版本 |
 | 状态或备份过大 | `507 FILE_STORE_TOO_LARGE` | 提示清理历史或减少媒体记录 |
 | 状态内容损坏 | `503 FILE_STORE_INVALID` | 停止写入，需从备份恢复 |

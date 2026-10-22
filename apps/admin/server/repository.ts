@@ -3,13 +3,40 @@ import type { PostRecord } from "../shared/contracts.js";
 import { assertSite, collection, type FileStore, type Row } from "./file-store.js";
 import { ApiFailure, digest } from "./security.js";
 import { validatePostSource } from "./source-document.js";
-import { readRepositoryFiles } from "./github.js";
+import { readRepositoryFiles, personalToken, GitHubError } from "./github.js";
 import { deriveManagedSettings, MANAGED_SETTINGS_PATH } from "./managed-settings.js";
 
 type SourceFile = { path: string; source: string };
 type RepositoryReader = (sha?: string) => Promise<Awaited<ReturnType<typeof readRepositoryFiles>>>;
 type PublishedPost = { id?: string; filePath?: string; path?: string; slug?: string; sourceSha256?: string };
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
+/**
+ * Reading the repository is the first thing the admin does, so its failure must name the
+ * actual cause instead of one catch-all sentence. The status code decides the remedy:
+ * an expired token, a token without Contents, a wrong repository name and a network
+ * failure are all fixed in different places.
+ */
+function repositoryReadFailure(error: unknown): ApiFailure {
+	if (error instanceof ApiFailure) return error;
+	const message = error instanceof Error ? error.message : "";
+	if (message.startsWith("Missing environment configuration:")) {
+		return new ApiFailure(503, "GITHUB_APP_CONFIGURATION_REQUIRED", "后台还没有配置 GitHub 令牌：请在 Vercel 环境变量里设置 GITHUB_TOKEN（细粒度 PAT，权限 Contents: Read and write + Metadata: Read）");
+	}
+	const repository = (process.env.GITHUB_REPOSITORY || "Nocticur/Firefly").trim();
+	const branch = (process.env.GITHUB_BRANCH || "master").trim();
+	const status = error instanceof GitHubError ? error.status : 0;
+	// Without a PAT the App fallback needs its own installation on the target repository.
+	const noToken = !personalToken();
+	const remedy = status === 401 ? "令牌无效或已过期，请重新生成后更新 GITHUB_TOKEN"
+		: status === 403 ? "令牌权限不足或触发 GitHub 限流，请确认该令牌对目标仓库有 Contents: Read and write"
+		: status === 404 ? (noToken
+			? `仓库或分支不存在，或凭据未授权该仓库；当前没有设置 GITHUB_TOKEN，正在走 GitHub App 回退，需确认该 App 已安装到 ${repository} 且有 Contents 权限（推荐改为配置 GITHUB_TOKEN）`
+			: `仓库或分支不存在，或令牌没有授权 ${repository}；请核对 GITHUB_REPOSITORY / GITHUB_BRANCH 与令牌的仓库授权范围`)
+		: status === 0 ? "无法连接 api.github.com，请检查部署环境的出网访问与 DNS"
+		: status >= 500 ? "GitHub 服务端暂时异常，稍后重试"
+		: "请检查令牌、仓库名与分支配置";
+	return new ApiFailure(503, "GITHUB_REPOSITORY_UNAVAILABLE", `GitHub 仓库暂时无法读取（${repository}@${branch}）：${remedy}`, { repository, branch, status });
+}
 function readJsonFile(files: SourceFile[], path: string): unknown {
 	const file = files.find((entry) => entry.path === path);
 	if (!file) return undefined;
@@ -22,12 +49,7 @@ function baselineSlug(path: string): string {
 export async function importRepository(store: FileStore, siteId: string, reader: RepositoryReader = readRepositoryFiles) {
 	let repository: Awaited<ReturnType<typeof readRepositoryFiles>>;
 	try { repository = await reader(); }
-	catch (error) {
-		if (error instanceof ApiFailure) throw error;
-		const message = error instanceof Error ? error.message : "GitHub 仓库读取失败";
-		if (message.startsWith("Missing environment configuration:")) throw new ApiFailure(503, "GITHUB_APP_CONFIGURATION_REQUIRED", message);
-		throw new ApiFailure(503, "GITHUB_REPOSITORY_UNAVAILABLE", "GitHub 仓库暂时无法读取；请检查受限 GitHub App 的仓库权限与网络连接");
-	}
+	catch (error) { throw repositoryReadFailure(error); }
 	const files: SourceFile[] = repository.files;
 	const publishedState = repository.publishedState || readJsonFile(files, "src/data/published-state.json");
 	const mapping: PublishedPost[] = isRecord(publishedState) && Array.isArray(publishedState.posts) ? publishedState.posts.filter(isRecord) as PublishedPost[] : [];
@@ -86,12 +108,10 @@ export async function ensureBaseline(store: FileStore, siteId: string): Promise<
 	try {
 		if (collection(await store.read(), "entities")["repository:baseline"]) return;
 	} catch { return; }
-	if (priming) { await priming.catch(() => undefined); return; }
-	priming = importRepository(store, siteId).catch((error) => {
-		console.error("[admin] repository baseline import failed:", error instanceof Error ? error.message : error);
-		return undefined;
-	});
-	try { await priming; } finally { priming = null; }
+	// The failure is surfaced rather than logged: a bad token used to leave the admin
+	// looking empty, which is indistinguishable from a repository that has no content.
+	if (!priming) priming = importRepository(store, siteId).finally(() => { priming = null; });
+	await priming;
 }export function compareRepositoryFiles(expected: SourceFile[], remote: SourceFile[]): RepositoryDifference[] {
 	const before = new Map(expected.map((file) => [file.path, file.source])); const after = new Map(remote.map((file) => [file.path, file.source]));
 	return [...new Set([...before.keys(), ...after.keys()])].sort().filter((path) => before.get(path) !== after.get(path)).map((path) => {

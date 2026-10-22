@@ -249,6 +249,22 @@ export type ReleaseDependencies = {
 function releaseFinalized(task: ReleaseTaskRow): boolean {
 	return (task.details?.finalizationState ?? task.details?.notificationState) === "done";
 }
+/**
+ * Once a release is verified the published source lives in Git, so keeping every local
+ * version of those posts only inflates the stored state document. Pruning here keeps the
+ * state (and the single Cloudflare KV value) from growing with each publish.
+ */
+async function prunePublishedHistory(store: FileStore, site: string, snapshot: FrozenSnapshot): Promise<void> {
+	const published = new Set(snapshot.sources.map((source) => source.id));
+	if (!published.size) return;
+	await store.update((state) => {
+		assertSite(state, site);
+		const entities = collection(state, "entities");
+		for (const [key, row] of Object.entries(entities)) {
+			if (row.kind === "post_version" && published.has(String((row.data as { postId?: unknown })?.postId))) delete entities[key];
+		}
+	});
+}
 async function completeReleaseFinalization(id: string, store: FileStore, site: string, afterVerified?: ReleaseDependencies["afterVerified"]): Promise<void> {
 	const task = await releaseRow(store, site, id);
 	if (!task || task.kind !== "publish" || task.state !== "verified" || task.details?.restored || task.details?.restoreRequiresReconciliation || releaseFinalized(task)) return;
@@ -263,6 +279,7 @@ async function completeReleaseFinalization(id: string, store: FileStore, site: s
 		current.details = { ...current.details, finalizationState: "done", finalizationCompletedAt: new Date().toISOString() }; current.updated_at = new Date().toISOString(); return true;
 	});
 	if (!done) throw new ApiFailure(409, "RELEASE_FINALIZATION_PENDING", "发布状态已变化，收尾任务仍须核查");
+	await prunePublishedHistory(store, site, snapshot);
 }
 /** Repairs verified friend publication state after interrupted Workflow execution. */
 export async function reconcileVerifiedReleaseFinalization(store = getStore(), site = getSiteId()): Promise<void> {

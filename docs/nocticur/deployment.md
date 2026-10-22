@@ -16,17 +16,42 @@
 
 后台以 Git 仓库为唯一数据源，不需要数据库或 Cloudflare KV。
 
-1. 在 GitHub 创建 **Fine-grained personal access token**，只授权目标仓库（例如 `Nocticur/blog`）。
+1. 在 GitHub 创建 **Fine-grained personal access token**：打开 <https://github.com/settings/personal-access-tokens/new>，只授权**本项目仓库** `Nocticur/Firefly`（后台与博客在同一个仓库）。
+   - 已有令牌的权限或有效期要改，用 <https://github.com/settings/personal-access-tokens> 编辑，或删除后新建。
+   - 需要更换令牌时，新建一个再替换 Vercel 里的 `GITHUB_TOKEN` 即可，旧令牌随后删除。
 2. 权限：**Contents = Read and write**（提交文章与设置）、**Metadata = Read**（GitHub 强制要求）。
-3. 在 Vercel 项目里配置：
+3. 在 Vercel 项目里配置（Project → Settings → Environment Variables，<https://vercel.com/dashboard>）：
    - `GITHUB_TOKEN`：上一步的令牌（Secret，仅 Production）
-   - `GITHUB_REPOSITORY`：`owner/repo`，例如 `Nocticur/blog`；不填时默认 `Nocticur/Firefly`
-   - `GITHUB_BRANCH`：例如 `master`；不填时默认 `master`
-4. 部署后打开 `/admin/` 输入 `ADMIN_ENTRY_PASSWORD` 登录，后台会自动导入仓库现有文章与设置，不会显示空白。
+   - `GITHUB_REPOSITORY`：默认值就是 `Nocticur/Firefly`，**通常无需填写**。若填写，必须与实际拥有权限的仓库一致，否则会因 404 报「无法读取」
+   - `GITHUB_BRANCH`：默认 `master`，通常无需填写
+4. 改完环境变量必须 **重新部署**（Redeploy）才会生效。
+5. 部署后打开 `/admin/` 输入 `ADMIN_ENTRY_PASSWORD` 登录，后台会自动导入仓库现有文章与设置，不会显示空白。
 
-仓库需要至少有一篇文章（`src/content/posts/**`），并且设置来源满足其一：已有 `src/data/managed-settings.json`，或可解析的 `src/config/siteConfig.ts`（后台会从 `title`、`subtitle`、`site_url`、`description`、`siteStartDate`、`timezone`、`navbar.logo.value`、`pages.*` 推导初始值）。
+仓库需要至少有一篇文章（`src/content/posts/**`），并且设置来源满足其一：已有 `src/data/managed-settings.json`（本项目已包含），或可解析的 `src/config/siteConfig.ts`（后台会从 `title`、`subtitle`、`site_url`、`description`、`siteStartDate`、`timezone`、`navbar.logo.value`、`pages.*` 推导初始值）。
 
 Cloudflare KV 已不再需要；若历史上配置过 `CF_*`，可以删除。开发/预览默认也不需要任何存储配置。
+
+## 排查「GitHub 仓库暂时无法读取」
+
+这条提示说明后台拿到了 HTTP 错误，具体原因由状态码决定。先在本地跑自检脚本（它只读环境变量，不会打印令牌）：
+
+```bash
+# 在仓库根目录（本项目 GITHUB_REPOSITORY 默认就是 Nocticur/Firefly，可省略）
+GITHUB_TOKEN=... GITHUB_REPOSITORY=Nocticur/Firefly GITHUB_BRANCH=master node scripts/check-github-access.mjs
+```
+
+也可以把变量写进本地 `.env`，脚本会自动读取。输出会指出仓库、分支、文章数、设置来源和令牌权限。
+
+| 状态码 | 含义 | 处理 |
+| --- | --- | --- |
+| `401` | 令牌无效、已过期或已被撤销 | 到 <https://github.com/settings/personal-access-tokens> 重新生成，更新 Vercel 的 `GITHUB_TOKEN` 后重新部署 |
+| `403` | 令牌权限不足或触发限流 | 确认该令牌对目标仓库有 **Contents: Read and write**；限流通常等待后自动恢复 |
+| `404` | 仓库/分支不存在，或令牌未授权该仓库 | 核对 `GITHUB_REPOSITORY`、`GITHUB_BRANCH`，并检查令牌的 **Repository access** 是否包含该仓库 |
+| `0` / 超时 | 无法连接 `api.github.com` | 检查部署环境的出网访问与 DNS |
+
+最常见的原因有两个：**令牌授权的仓库与 `GITHUB_REPOSITORY` 不是同一个**（令牌只授权了 A 仓库，却让后台读 B 仓库）；以及**改了环境变量却没重新部署**。后台现在会在错误信息里带上实际状态码、仓库与分支，不再是笼统的一句话。
+
+GitHub App 路径仍然保留，但只在完全没有 `GITHUB_TOKEN` 时才会使用；那条路径要求 App 已安装到 `GITHUB_REPOSITORY` 指定的仓库。**推荐直接配置 PAT，把 `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` 删掉**，避免走错分支。
 
 ## 配置 CloudFlare-ImgBed
 
