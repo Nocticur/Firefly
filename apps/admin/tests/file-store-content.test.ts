@@ -85,6 +85,30 @@ test("repository import is atomic, idempotent, retains drafts and unknown settin
 	assert.equal(Object.keys(collection(await bad.read(), "entities")).length, 0);
 });
 
+test("a draft created before the repository was readable adopts the baseline instead of blocking it", async () => {
+	const site = "tests/import-conflict:development";
+	const store = createMemoryStore(site);
+	const repository = fixture();
+	const repositoryId = repository.publishedState.posts[0].id;
+	// This is the state a bad token leaves behind: local drafts, no baseline at all.
+	const local = await createPost(store, site, source.replace("旧标题", "本地草稿"), "original");
+	assert.equal(collection(await store.read(), "entities")["repository:baseline"], undefined);
+
+	const result = await importRepository(store, site, async () => repository);
+	assert.equal(result.imported, true);
+	assert.ok(collection(await store.read(), "entities")["repository:baseline"]);
+	// The repository owns this path, but the edited bytes are the user's and must survive
+	// the import; the article adopts published-state's stable id so its identity is stable.
+	const adopted = await getPost(store, site, repositoryId);
+	assert.equal(adopted.title, "本地草稿");
+	assert.equal(adopted.filePath, "src/content/posts/original.md");
+	assert.equal(adopted.revision, 1);
+	await assert.rejects(getPost(store, site, local.id), failure("POST_NOT_FOUND"));
+	// Exactly one record per repository file: the draft was adopted, not duplicated.
+	const posts = Object.values(collection(await store.read(), "entities")).filter(row => row.kind === "post");
+	assert.equal(posts.length, 1);
+});
+
 test("repository synchronization preserves drafts, detects byte changes, and blocks uncertain publish", async () => {
 	const site = "tests/sync:development";
 	const store = createMemoryStore(site);

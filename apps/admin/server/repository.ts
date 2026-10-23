@@ -75,12 +75,31 @@ export async function importRepository(store: FileStore, siteId: string, reader:
 			}
 			return { imported: false, headSha: existing.data.headSha, message: "管理基线已存在；不会覆盖草稿或重复发布" };
 		}
-		if (Object.values(entities).some(row => row.kind === "post")) throw new ApiFailure(409, "BASELINE_IMPORT_CONFLICT", "当前已有管理草稿但尚无仓库基线，请先处理导入冲突");
+		// A draft created before any baseline existed (for example while the repository
+		// was unreadable) must not lock the console out of its first import. The local
+		// records the repository already owns are adopted in place, so their edited
+		// bytes survive, and anything else stays a local draft waiting to be published.
+		const localPosts = Object.values(entities).filter(row => row.kind === "post") as (Row & { data: PostRecord })[];
+		const localByPath = new Map(localPosts.map(row => [`path:${row.data.filePath}`, row]));
+		const localBySlug = new Map(localPosts.map(row => [`slug:${row.data.slug}`, row]));
 		for (const file of posts) {
 			const metadata = validatePostSource(file.source);
 			const map = mapping.find((item) => (item.filePath || item.path) === file.path) || mapping.find((item) => item.slug === baselineSlug(file.path));
 			if (map?.sourceSha256 && map.sourceSha256 !== digest(file.source)) throw new ApiFailure(409, "BASELINE_SOURCE_MISMATCH", `文章 ${file.path} 与发布基线的字节哈希不一致`);
 			const slug = map?.slug || (typeof metadata.slug === "string" ? metadata.slug : baselineSlug(file.path));
+			const adopted = localByPath.get(`path:${file.path}`) ?? localBySlug.get(`slug:${slug}`);
+			if (adopted) {
+				// Keep the published state's stable id so the article's identity does not
+				// change just because the console could not read the repository earlier.
+				const targetId = typeof map?.id === "string" ? map.id : String(adopted.id);
+				if (targetId !== String(adopted.id)) {
+					if (entities[`post:${targetId}`]) throw new ApiFailure(409, "BASELINE_IMPORT_CONFLICT", "本地草稿与仓库文章的稳定 ID 冲突，请人工核对");
+					delete entities[`post:${String(adopted.id)}`];
+					for (const row of Object.values(entities)) if (row.kind === "post_version" && (row.data as { postId?: unknown }).postId === adopted.id) (row.data as { postId?: string }).postId = targetId;
+				}
+				entities[`post:${targetId}`] = { ...adopted, id: targetId, data: { ...adopted.data, id: targetId, filePath: file.path } };
+				continue;
+			}
 			const draft = metadata.draft === true;
 			const post: PostRecord = { id: map?.id || randomUUID(), filePath: file.path, slug, title: String(metadata.title), published: String(metadata.published), draft, format: file.path.endsWith(".mdx") ? "mdx" : "md", source: file.source, metadata, revision: 1, publishedRevision: draft ? null : 1, publishedSource: draft ? null : file.source, updatedAt: new Date().toISOString() };
 			if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(post.id)) throw new ApiFailure(422, "BASELINE_ID_INVALID", `文章 ${file.path} 的稳定 ID 须为 UUID`);
