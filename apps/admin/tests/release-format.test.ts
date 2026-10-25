@@ -16,10 +16,15 @@ test("public digest uses Unicode code point ordering across nested keys and publ
 	assert.notEqual(publicContentDigest(posts, { ...settings, settings: { title: "Changed" } }, redirects), expected);
 });
 
-test("publication preserves saved YAML comments and MDX and never clears draft markers", () => {
+test("publication preserves saved YAML comments and MDX and releases draft markers", () => {
 	const raw = '---\r\n# Original YAML comment\r\ntitle: "Unknown"\r\ndraft: false\r\ncustom: [a, b]\r\n---\r\nimport Widget from "./Widget.astro";\r\n<Widget value={{ nested: true }} />\r\n';
 	assert.equal(publishedSource(raw, "fixed-slug"), raw);
-	assert.throws(() => publishedSource(raw.replace("draft: false", "draft: true")), /草稿/);
+	// The private-draft feature is gone: publishing clears the marker instead of refusing.
+	const released = publishedSource(raw.replace("draft: false", "draft: true"));
+	assert.match(released, /draft: false/);
+	assert.doesNotMatch(released, /draft: true/);
+	assert.match(released, /# Original YAML comment/);
+	assert.match(released, /<Widget value=\{\{ nested: true \}\} \/>/);
 	assert.throws(() => publishedSource(raw.replace("draft: false", 'draft: true\r\ndraft: false')), /Invalid YAML/);
 	assert.throws(() => publishedSource("body without front matter"), /front matter/);
 	assert.deepEqual(publicSettings({ title: "Public", avatar: "media:one", retainedUnknown: "private", token: "secret", schemaVersion: 999 }), { title: "Public", avatar: "media:one" });

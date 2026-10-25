@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { AppEnv } from "./types.js";
 import { registerAuthRoutes } from "./auth.js";
+import { registerAiRoutes } from "./ai.js";
 import { registerContentRoutes } from "./content.js";
 import { registerSettingsRoutes } from "./settings.js";
 import { registerMediaRoutes } from "./media.js";
@@ -47,6 +48,7 @@ export function createApp(store?: FileStore) {
 	);
 	app.get("/api/openapi.json", (c) => c.json(openApiDocument));
 	registerAuthRoutes(app);
+	registerAiRoutes(app);
 	registerContentRoutes(app);
 	registerSettingsRoutes(app);
 	registerMediaRoutes(app);

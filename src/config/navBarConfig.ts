@@ -48,7 +48,6 @@ const getDynamicNavBarConfig = (): NavBarConfig => ({
 					external: true,
 					icon: "material-symbols:docs",
 				},
-				LinkPresets.Admin,
 			],
 		},
 	],

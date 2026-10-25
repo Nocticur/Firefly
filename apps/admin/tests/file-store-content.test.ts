@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createMemoryStore, collection } from "../server/file-store.js";
-import { createPost, getPost, savePost, listPostHistory, restorePostVersion } from "../server/content.js";
+import { createPost, deletePost, getPost, savePost, listPostHistory, restorePostVersion } from "../server/content.js";
+import { freezeRelease } from "../server/releases.js";
 import { importRepository, synchronizeRepository, compareRepositoryFiles } from "../server/repository.js";
 import { getManagedEntity, saveManagedEntity } from "../server/settings.js";
 import { ApiFailure, digest } from "../server/security.js";
@@ -162,4 +163,30 @@ test("older baselines use immutable Git evidence and reject an advancing baselin
 		return { ...original, headSha: nextSha };
 	}), failure("BASELINE_REVISION_CONFLICT"));
 	assert.equal((collection(await store.read(), "entities")["repository:baseline"].data as Record<string, unknown>).headSha, "c".repeat(40));
+});
+
+test("draft addresses follow the title until publishing freezes them", async () => {
+	const site = "tests/autoslug:development"; const store = createMemoryStore(site);
+	const post = await createPost(store, site, source);
+	assert.equal(post.slug, "旧标题");
+	assert.equal((await savePost(store, site, post.id, source.replace("旧标题", "新的 标题"), 1)).slug, "新的-标题");
+	// An explicitly chosen address is never regenerated behind the user's back.
+	const pinned = await createPost(store, site, source.replace("旧标题", "另一篇"), "固定/子路径");
+	assert.equal((await savePost(store, site, pinned.id, source.replace("旧标题", "改名后"), 1)).slug, "固定/子路径");
+});
+
+test("deleting a published post queues its Git file for deletion in the next release", async () => {
+	const site = "tests/delete-post:development"; const store = createMemoryStore(site);
+	const repository = fixture();
+	await importRepository(store, site, async () => repository);
+	const id = repository.publishedState.posts[0].id;
+	assert.deepEqual(await deletePost(store, site, id), { id, title: "旧标题", published: true, pendingGitDeletion: true });
+	assert.equal(collection(await store.read(), "entities")[`post:${id}`], undefined);
+	const release = await freezeRelease({ postIds: [], expectedRevisions: {}, idempotencyKey: randomUUID() }, store, site);
+	const snapshot = collection(await store.read(), "release_snapshots")[release.snapshotId!].data as { deletions: string[] };
+	assert.deepEqual(snapshot.deletions, ["src/content/posts/original.md"]);
+	// A never-published draft leaves nothing behind in Git.
+	const draft = await createPost(store, site, source.replace("旧标题", "纯草稿"));
+	assert.equal((await deletePost(store, site, draft.id)).pendingGitDeletion, false);
+	assert.equal(collection(await store.read(), "entities")[`post_deletion:${draft.id}`], undefined);
 });

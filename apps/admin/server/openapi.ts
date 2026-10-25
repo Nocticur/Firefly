@@ -48,12 +48,15 @@ route("post", "/api/public/comments", "Public interactions", "Post plain text af
 route("get", "/api/public/friends", "Public interactions", "Read last verified public friend snapshot", true);
 route("post", "/api/public/friends", "Public interactions", "Submit friend application", true, { name: string, url: string, description: string, avatar: string, email: string, turnstileToken: string }, ["name", "url", "email", "turnstileToken"]);
 for (const resource of ["comments", "bans", "friends"]) route("get", `/api/${resource}`, "Moderation", `List private ${resource} records`);
+route("post", "/api/ai/summary", "Content", "Draft a summary from post source using the configured AI provider", false, { source: string }, ["source"]);
 route("post", "/api/comments/{id}/delete", "Moderation", "Soft-delete comment preserving reply relationships");
 route("post", "/api/bans", "Moderation", "Ban stable visitor subject", false, { subject: string, reason: string }, ["subject"]);
 route("delete", "/api/bans/{id}", "Moderation", "Unban visitor");
+route("post", "/api/friends", "Moderation", "Create a friend entry manually without a public application", false, { name: string, url: string, description: string, avatar: string, email: string, group: string, sortOrder: { type: "integer" } }, ["name", "url"]);
 route("post", "/api/friends/{id}/approve", "Moderation", "Approve for next explicit release");
 route("post", "/api/friends/{id}/reject", "Moderation", "Save a rejected application and its reason", false, { reason: string }, ["reason"]);
-route("patch", "/api/friends/{id}", "Moderation", "Save grouping and order for next release", false, { group: string, sortOrder: { type: "integer" } });
+route("patch", "/api/friends/{id}", "Moderation", "Update friend details, grouping and order for next release", false, { name: string, url: string, description: string, avatar: string, email: string, group: string, sortOrder: { type: "integer" } });
+route("post", "/api/friends/{id}/delete", "Moderation", "Delete a friend entry; the public snapshot updates on the next release");
 route("post", "/api/releases", "Publishing", "Freeze explicit selection and return durable task", false, { postIds: { type: "array", items: string }, expectedRevisions: { type: "object", additionalProperties: revision }, idempotencyKey: string }, ["postIds", "expectedRevisions", "idempotencyKey"]);
 route("get", "/api/tasks", "Publishing", "Read durable deployment and maintenance tasks");
 route("get", "/api/tasks/{id}", "Publishing", "Read task evidence and conflict details");

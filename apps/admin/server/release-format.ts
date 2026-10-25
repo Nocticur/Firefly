@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { parseDocument } from "yaml";
+import { patchMetadata } from "./source-document.js";
 
 export type PublishedPost = { id: string; filePath: string; slug: string; sourceSha256: string };
 export type Redirect = { from: string; to: string; permanent: true };
@@ -25,9 +26,9 @@ export function publishedSource(source: string, _slug?: string): string {
 	if (!match) throw new Error("Publishing requires valid YAML front matter");
 	const document = parseDocument(match[2], { keepSourceTokens: true });
 	if (document.errors.length) throw new Error("Invalid YAML front matter must be corrected before publishing");
-	if (document.get("draft") === true) throw new Error("请先明确取消草稿标记并保存，然后发布；原有草稿示例不会自动公开");
-	// Publication freezes the exact saved bytes, including YAML comments and MDX.
-	return source;
+	// Removing the private-draft feature must not strand drafts: publishing releases them by
+	// clearing the flag, so the article actually renders on the site.
+	return document.get("draft") === true ? patchMetadata(source, { draft: false }) : source;
 }
 
 const publicSettingKeys = new Set(["title", "subtitle", "description", "siteUrl", "siteStartDate", "timezone", "profileName", "bio", "avatar", "contactLinks", "homeCover", "defaultCover", "background"]);

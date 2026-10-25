@@ -191,11 +191,6 @@
             "url": "https://docs-firefly.cuteleaf.cn",
             "external": true,
             "icon": "material-symbols:docs"
-          },
-          {
-            "name": "后台管理",
-            "url": "/admin/",
-            "icon": "material-symbols:admin-panel-settings-outline"
           }
         ]
       }

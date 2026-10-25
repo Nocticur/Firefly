@@ -97,10 +97,23 @@ GitHub App（`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALLATION_I
 
 **Git 仓库是唯一数据源**，没有数据库、键值存储或迁移命令：
 
-- 文章：`src/content/posts/**/*.md|mdx`，由后台直接读写并提交。
+- 文章：`src/content/posts/**/*.md|mdx`，由后台直接读写并提交。草稿只是"尚未发布的编辑版本"，发布时会自动清除该文件的 `draft` 标记并上线，内容不会丢失。
+- 加密文章：编辑页勾选「保留为加密草稿」并填写密码，密码写入该文章 frontmatter 的 `password` 字段，随文章一起提交到仓库，不需要任何环境变量。
 - 站点设置、导航、图标：`src/data/managed-settings.json`。
 - 发布清单：`src/data/published-state.json`；重定向：`src/data/redirects.json`。
 - 评论、友链、访客封禁等少量运行时写入保存在后台状态中；未配置 Cloudflare KV 时使用进程内存，重启即清空。
+
+### AI 生成摘要（可选）
+
+后台文章编辑页的「AI 生成摘要」按钮走 OpenAI `chat/completions` 兼容接口，只认三个变量，换服务商不用改代码：
+
+| 变量 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `AI_API_KEY` | 是 | — | 缺失时按钮提示「未配置 AI_API_KEY」 |
+| `AI_BASE_URL` | 否 | `https://api.deepseek.com` | 任何兼容端点，例如 `https://api.openai.com/v1` |
+| `AI_MODEL` | 否 | `deepseek-chat` | 对应服务商的模型名 |
+
+摘要只提交正文（自动去掉 front matter、代码块和图片语法），生成结果先填进摘要框，你可以改完再保存。
 
 ### 草稿与历史存在哪里
 

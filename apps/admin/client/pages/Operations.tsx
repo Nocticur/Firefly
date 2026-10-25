@@ -28,7 +28,9 @@ export function Releases({ canPublish }: { canPublish: boolean }) {
 	const [selected, setSelected] = useState<string[]>(() => readPendingRelease()?.postIds ?? []); const [confirm, setConfirm] = useState(false); const [detail, setDetail] = useState<TaskDetail | null>(null);
 	const pendingRequest = useRef<PendingRelease | null>(readPendingRelease());
 	const checked = useRef(new Set<string>());
-	const eligible = posts.data?.filter(post => !post.draft) ?? [];
+	// Only posts with unpublished changes are publishable; already online articles would
+	// make every release look like it has work to do. Drafts are released on publish.
+	const eligible = posts.data?.filter(post => post.publishedRevision !== post.revision) ?? [];
 	const active = tasks.data?.filter(task => task.kind === "publish" && !terminal.has(task.state)) ?? [];
 	async function loadDetail(id: string) { const result = await request<TaskDetail>(`/tasks/${encodeURIComponent(id)}`); setDetail(result.data); }
 	async function reconcile(id: string, manual = false) { await write(`/tasks/${encodeURIComponent(id)}/reconcile`, manual ? { reconcileRestored: true } : {}); await tasks.reload(); if (detail?.id === id) await loadDetail(id); }
@@ -54,7 +56,7 @@ export function Releases({ canPublish }: { canPublish: boolean }) {
 		if (!canPublish || !posts.data) throw new Error("当前环境没有生产发布权限。");
 		if (!pendingRequest.current) {
 			const chosen = selected.map(id => posts.data!.find(post => post.id === id));
-			if (chosen.some(post => !post || post.draft)) throw new Error("选中文章已变更。请刷新并重新选择已保存的非草稿文章。");
+			if (chosen.some(post => !post)) throw new Error("选中文章已变更，请刷新后重新选择。");
 			pendingRequest.current = { key: crypto.randomUUID(), postIds: [...selected], expectedRevisions: Object.fromEntries(chosen.map(post => [post!.id, post!.revision])) };
 			storePendingRelease(pendingRequest.current);
 		}

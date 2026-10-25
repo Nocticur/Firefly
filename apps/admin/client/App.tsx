@@ -17,7 +17,7 @@ const items = [
 	{ id: "dashboard", label: "仪表盘", icon: LayoutDashboard }, { id: "posts", label: "文章与历史", icon: BookOpen },
 	{ id: "settings", label: "站点设置", icon: Settings2 }, { id: "services", label: "服务设置", icon: Wrench }, { id: "navigation", label: "导航与图标", icon: ListTree },
 	{ id: "media", label: "媒体库", icon: Image }, { id: "comments", label: "评论管理", icon: MessageSquare },
-	{ id: "friends", label: "友链审核", icon: Link2 }, { id: "releases", label: "发布任务", icon: Rocket }, { id: "maintenance", label: "维护与备份", icon: Wrench },
+	{ id: "friends", label: "友链", icon: Link2 }, { id: "releases", label: "发布任务", icon: Rocket }, { id: "maintenance", label: "维护与备份", icon: Wrench },
 ];
 function readPage() { return location.hash.slice(1).split("?")[0] || "dashboard"; }
 export function App() {

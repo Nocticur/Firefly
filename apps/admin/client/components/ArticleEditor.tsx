@@ -12,6 +12,7 @@ import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table
 import { common, createLowlight } from "lowlight";
 import { Bold, Italic, Strikethrough, Code, Link, Unlink, Heading1, Heading2, List, ListOrdered, Quote, Minus, Table2, Sigma, GitBranch, Image, Undo2, Redo2, Check, X, FileCode2, Pilcrow } from "lucide-react";
 import type { MediaRecord } from "../../shared/contracts";
+import { uploadMedia } from "../lib/upload";
 import { analyzeSource, combineEditedBody, imageDisplaySource, isSafeImageSource, isSafeLink, preserveSourceLineEndings, serializeSafeTable } from "../lib/source-safety";
 import "katex/dist/katex.min.css";
 import "./editor.css";
@@ -85,6 +86,17 @@ export function ArticleEditor({ source, onChange, media = [] }: ArticleEditorPro
 	const [slash, setSlash] = useState<SlashState | null>(null);
 	const [slashIndex, setSlashIndex] = useState(0);
 	const [dialog, setDialog] = useState<Dialog | null>(null);
+	const [uploading, setUploading] = useState(false);
+	async function uploadFromDisk(file: File | undefined) {
+		if (!file) return;
+		setUploading(true); setError("");
+		try {
+			const record = await uploadMedia(file);
+			// Private media references resolve to the public image address at publish time.
+			setDialog((current) => current ? { ...current, value: `media:${record.id}`, alt: current.alt || record.alt } : current);
+		} catch (cause) { setError(cause instanceof Error ? cause.message : "上传失败，请重试"); }
+		finally { setUploading(false); }
+	}
 	const [, refresh] = useState(0);
 	const analysisRef = useRef(analysis);
 	const onChangeRef = useRef(onChange);
@@ -277,6 +289,7 @@ export function ArticleEditor({ source, onChange, media = [] }: ArticleEditorPro
 			<label>{dialog.kind === "math" ? "LaTeX" : "地址 / URL"}{dialog.kind === "math" ? <textarea autoFocus value={dialog.value} onChange={(event) => setDialog({ ...dialog, value: event.target.value })} placeholder="\\frac{a}{b}" /> : <input autoFocus value={dialog.value} onChange={(event) => setDialog({ ...dialog, value: event.target.value })} placeholder="https://" />}</label>
 			{dialog.kind === "math" && dialog.pos === undefined && <label className="ff-dialog-checkbox"><input type="checkbox" checked={dialog.block} onChange={(event) => setDialog({ ...dialog, block: event.target.checked })} /> 块公式 / Block math</label>}
 			{dialog.kind === "image" && <><label>替代文本 / Alt text<input value={dialog.alt ?? ""} onChange={(event) => setDialog({ ...dialog, alt: event.target.value })} /></label>
+				<div className="ff-editor-upload"><label className="ff-editor-upload-button">{uploading ? "上传中…" : "从本地上传图片"}<input type="file" accept="image/*" hidden disabled={uploading} onChange={(event) => void uploadFromDisk(event.target.files?.[0])} /></label></div>
 				{media.some((item) => item.contentType.startsWith("image/")) && <div className="ff-editor-media-picker"><p>选择已上传图片 · 私有引用会随显式发布转换</p>{media.filter((item) => item.contentType.startsWith("image/")).map((item) => <button type="button" key={item.id} onClick={() => setDialog({ ...dialog, value: `media:${item.id}`, alt: item.alt })}><img src={item.publishedUrl || item.url || ""} alt={item.alt} loading="lazy" /><span>{item.name}</span></button>)}</div>}</>}
 			{error && <p className="ff-dialog-error" role="alert">{error}</p>}
 			<div className="ff-dialog-actions"><button type="button" onClick={() => setDialog(null)}>取消</button><button type="submit"><Check size={15} /> 确认</button></div>

@@ -78,7 +78,8 @@ export async function freezeRelease(input: z.infer<typeof releaseInput>, store =
 			const post = row.data as PostRecord;
 			if (selected.has(String(row.id))) {
 				if (input.expectedRevisions[String(row.id)] !== Number(row.revision)) throw new ApiFailure(409, "REVISION_CONFLICT", "文章已更新，请重新选择当前版本", { id: row.id, expected: input.expectedRevisions[String(row.id)], actual: Number(row.revision) });
-				if (post.draft) throw new ApiFailure(409, "PRIVATE_DRAFT_SELECTED", "请先明确取消草稿标记并保存，再选择发布", { id: row.id });
+				// Drafts are no longer a private feature; publishing releases them by clearing
+				// the flag instead of refusing the selection.
 				let source: string;
 				try { source = publishedSource(post.source); } catch (error) { throw new ApiFailure(400, "INVALID_PUBLISH_SOURCE", (error as Error).message); }
 				sources.push({ id: String(row.id), revision: Number(row.revision), filePath: post.filePath, slug: post.slug, source, originalSource: source });
@@ -98,6 +99,9 @@ export async function freezeRelease(input: z.infer<typeof releaseInput>, store =
 		const friends = Object.values(collection(state, "friends")).filter((row) => ["approved", "published"].includes(String(row.status))).sort((a,b) => String(a.group_name).localeCompare(String(b.group_name)) || Number(a.sort_order)-Number(b.sort_order) || String(a.id).localeCompare(String(b.id)));
 		settings.friends = friends.map((row) => ({ id: row.id, name: row.name, url: row.url, avatar: row.avatar, description: row.description, group: row.group_name, sortOrder: row.sort_order }));
 		const oldPosts = Array.isArray(base.posts) ? base.posts as PublishedPost[] : [];
+		// Posts deleted from the console must also disappear from Git; otherwise the article
+		// keeps rendering. Only paths the previous release actually published are deletable.
+		const tombstonePaths = Object.values(entities).filter((row) => row.kind === "post_deletion").map((row) => String((row.data as Row).filePath));
 		const previousRedirects = (Array.isArray(base.redirects) ? base.redirects : []) as Redirect[];
 		const redirects = structuredClone(previousRedirects);
 		for (const source of sources) {
@@ -114,11 +118,15 @@ export async function freezeRelease(input: z.infer<typeof releaseInput>, store =
 		const activeRoutes = new Map(sources.map((post) => [`/posts/${post.slug.replace(/^\/+|\/+$/g, "")}/`, post.id]));
 		for (const redirect of redirects) if (activeRoutes.has(redirect.from)) throw new ApiFailure(409, "SLUG_REDIRECT_CONFLICT", "该网址保留为已发布文章的永久重定向，请为当前文章选择其他 slug", { id: activeRoutes.get(redirect.from), from: redirect.from, to: redirect.to });
 		const posts = sources.map(({ id, filePath, slug, source }) => ({ id, filePath, slug, sourceSha256: sha256(source) }));
+		const deletions = [...new Set([
+			...oldPosts.filter((old) => selected.has(old.id) && !posts.some((post) => post.filePath === old.filePath)).map((old) => old.filePath),
+			...tombstonePaths.filter((path) => oldPosts.some((old) => old.filePath === path) && !posts.some((post) => post.filePath === path)),
+		])];
 		const digest = publicContentDigest(posts, settings, redirects);
 		const files = sources.map(({ filePath, source }) => ({ path: filePath, source }));
 		const publishedState = { schemaVersion: 1, posts, taskId, snapshotId, publicContentDigest: digest };
 		files.push({ path: "src/data/published-state.json", source: `${JSON.stringify(publishedState, null, 2)}\n` }, { path: "src/data/managed-settings.json", source: `${JSON.stringify(settings, null, 2)}\n` }, { path: "src/data/redirects.json", source: `${JSON.stringify(redirects, null, 2)}\n` });
-		const snapshot: FrozenSnapshot = { id: snapshotId, taskId, digest, posts, sources, files, settings, redirects, friendIds: friends.map((row) => String(row.id)), friendRevisions: Object.fromEntries(friends.map((row) => [String(row.id), Number(row.revision)])), selectedIds: [...selected], entityRevisions: entityRows.map((row) => ({ kind: String(row.kind), id: String(row.id), revision: Number(row.revision) })), deletions: oldPosts.filter((old) => selected.has(old.id) && !posts.some((post) => post.filePath === old.filePath)).map((old) => old.filePath) };
+		const snapshot: FrozenSnapshot = { id: snapshotId, taskId, digest, posts, sources, files, settings, redirects, friendIds: friends.map((row) => String(row.id)), friendRevisions: Object.fromEntries(friends.map((row) => [String(row.id), Number(row.revision)])), selectedIds: [...selected], entityRevisions: entityRows.map((row) => ({ kind: String(row.kind), id: String(row.id), revision: Number(row.revision) })), deletions };
 		try { snapshot.deploymentConfig = buildDeploymentConfig(base.deploymentConfig, redirects, previousRedirects); }
 		catch (error) { throw new ApiFailure(409, "PERMANENT_REDIRECT_CONFIGURATION_REQUIRED", (error as Error).message); }
 		if (snapshot.deploymentConfig) files.push({ path: "vercel.json", source: `${JSON.stringify(snapshot.deploymentConfig, null, 2)}\n` });
@@ -403,6 +411,8 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 			if (!updateTaskState(state, site, id, fence, "verified", { productionSha: target, deploymentId: verified.deploymentId, message: "Git、目标项目生产别名及两处发布清单已核验一致", details: { ...(restored ? { restoreRequiresReconciliation: false } : {}), finalizationState: initial.details?.restored ? "skipped" : "pending" } })) return false;
 			for (const source of snapshot.sources) { const post = entities[`post:${source.id}`]; if (post) { post.data = { ...(post.data as Row), publishedSource: source.source, publishedRevision: source.revision }; post.updated_at = new Date().toISOString(); } }
 			if (baseline && base) { delete base.repositoryFiles; Object.assign(base, { headSha: target, posts: snapshot.posts, redirects: snapshot.redirects, snapshotId: snapshot.id, taskId: id, publicContentDigest: snapshot.digest, publishedSettings: snapshot.settings.settings, publishedNavigation: snapshot.settings.navigation, publishedIcons: snapshot.settings.icons, ...(snapshot.repositoryFiles ? { repositoryFiles: snapshot.repositoryFiles } : {}), ...(snapshot.deploymentConfig ? { deploymentConfig: snapshot.deploymentConfig } : {}) }); baseline.updated_at = new Date().toISOString(); }
+			// The removal is now committed, so the tombstone no longer has to gate a release.
+			for (const path of snapshot.deletions) for (const [key, row] of Object.entries(entities)) if (row.kind === "post_deletion" && (row.data as Row).filePath === path) delete entities[key];
 			const lock = collection(state, "release_locks")[site]!; lock.task_id = null; lock.lease_until = new Date().toISOString(); return true;
 		});
 		if (!finalized) return persistedState();

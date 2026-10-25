@@ -143,16 +143,27 @@ export function createFileStore(
 	backend: DocumentBackend,
 	site: string,
 ): FileStore {
+	// One admin page fires several parallel API calls and each used to re-download and
+	// re-parse the whole state document. A very short cache collapses them into a single
+	// read; every write invalidates it so a save is never followed by stale data.
+	const readCacheMs = 1500;
+	let cached: { json: string; etag: string; at: number } | null = null;
 	return {
 		async read() {
+			if (cached && Date.now() - cached.at < readCacheMs)
+				return parse(cached.json, site);
 			const current = await backend.read();
-			return current ? parse(current.json, site) : empty(site);
+			if (!current) { cached = null; return empty(site); }
+			cached = { json: current.json, etag: current.etag, at: Date.now() };
+			return parse(current.json, site);
 		},
 		async update<T>(fn: (state: StoreState) => T): Promise<T> {
 			const operationId = randomUUID();
 			let priorResult: T | undefined;
 			let attempted = false;
 			let priorRevision = 0;
+			// Writes must always see the authoritative document, never the short-lived cache.
+			cached = null;
 			for (let attempt = 0; attempt < 12; attempt++) {
 				const current = await backend.read();
 				const state = current ? parse(current.json, site) : empty(site);

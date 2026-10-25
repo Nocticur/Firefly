@@ -171,6 +171,16 @@ function friendRecord(row: Row): Row {
 		createdAt: timestamp(row.created_at),
 	};
 }
+function friendSortOrder(value: unknown): number {
+	if (
+		typeof value !== "number" ||
+		!Number.isSafeInteger(value) ||
+		value < -2147483648 ||
+		value > 2147483647
+	)
+		throw new ApiFailure(400, "INVALID_SORT_ORDER", "排序值必须是有效整数");
+	return value;
+}
 
 export function publicInteractionOrigin(): string {
 	const environment = runtimeEnvironment();
@@ -817,6 +827,56 @@ export function registerInteractionRoutes(
 				.map(friendRecord),
 		}),
 	);
+	app.post("/api/friends", requireAdmin, async (c) => {
+		const body = await readJson(c.req.raw, 4096);
+		const name = text(body.name, "站点名称", 120);
+		const url = safeInteractionUrl(body.url);
+		const description = text(body.description, "站点描述", 2000, true);
+		const avatar = safeInteractionUrl(body.avatar, true);
+		const address = email(body.email, true);
+		const group = text(body.group, "分组", 120, true);
+		const order =
+			body.sortOrder === undefined || body.sortOrder === null
+				? 0
+				: friendSortOrder(body.sortOrder);
+		const id = randomUUID();
+		const now = new Date().toISOString();
+		const data = await store().update((state) => {
+			writable(state, siteId());
+			const rows = collection(state, "friends");
+			if (
+				Object.values(rows).some(
+					(row) =>
+						row.url === url &&
+						["pending", "approved", "published"].includes(String(row.status)),
+				)
+			)
+				throw new ApiFailure(
+					409,
+					"FRIEND_ALREADY_EXISTS",
+					"该友链网址已存在，请直接编辑现有记录",
+				);
+			const row = {
+				id,
+				name,
+				url,
+				description,
+				avatar,
+				email: address,
+				status: "approved",
+				group_name: group,
+				sort_order: order,
+				revision: 1,
+				rejection_reason: null,
+				published_at: null,
+				created_at: now,
+				updated_at: now,
+			};
+			rows[id] = row;
+			return friendRecord(row);
+		});
+		return c.json({ data }, 201);
+	});
 	app.post("/api/friends/:id/approve", requireAdmin, async (c) => {
 		const id = identifier(c.req.param("id"), "友链 ID");
 		const data = await store().update((state) => {
@@ -856,29 +916,57 @@ export function registerInteractionRoutes(
 	});
 	app.patch("/api/friends/:id", requireAdmin, async (c) => {
 		const body = await readJson(c.req.raw, 4096);
-		const group = text(body.group, "分组", 120, true);
-		const order = body.sortOrder;
-		if (
-			typeof order !== "number" ||
-			!Number.isSafeInteger(order) ||
-			order < -2147483648 ||
-			order > 2147483647
-		)
-			throw new ApiFailure(400, "INVALID_SORT_ORDER", "排序值必须是有效整数");
+		const patch: Row = {};
+		if (Object.hasOwn(body, "name"))
+			patch.name = text(body.name, "站点名称", 120);
+		if (Object.hasOwn(body, "url"))
+			patch.url = safeInteractionUrl(body.url);
+		if (Object.hasOwn(body, "description"))
+			patch.description = text(body.description, "站点描述", 2000, true);
+		if (Object.hasOwn(body, "avatar"))
+			patch.avatar = safeInteractionUrl(body.avatar, true);
+		if (Object.hasOwn(body, "email")) patch.email = email(body.email, true);
+		if (Object.hasOwn(body, "group"))
+			patch.group_name = text(body.group, "分组", 120, true);
+		if (Object.hasOwn(body, "sortOrder"))
+			patch.sort_order = friendSortOrder(body.sortOrder);
+		if (!Object.keys(patch).length)
+			throw new ApiFailure(400, "FRIEND_UPDATE_EMPTY", "请提供要修改的友链字段");
 		const id = identifier(c.req.param("id"), "友链 ID");
 		const data = await store().update((state) => {
 			writable(state, siteId());
-			const row = collection(state, "friends")[id];
-			if (!row) throw new ApiFailure(404, "FRIEND_NOT_FOUND", "友链申请不存在");
-			if (row.group_name !== group || row.sort_order !== order)
+			const rows = collection(state, "friends");
+			const row = rows[id];
+			if (!row) throw new ApiFailure(404, "FRIEND_NOT_FOUND", "友链不存在");
+			if (
+				patch.url &&
+				Object.values(rows).some(
+					(other) =>
+						other.id !== id &&
+						other.url === patch.url &&
+						["pending", "approved", "published"].includes(String(other.status)),
+				)
+			)
+				throw new ApiFailure(
+					409,
+					"FRIEND_ALREADY_EXISTS",
+					"该友链网址已存在，请勿重复添加",
+				);
+			if (Object.entries(patch).some(([key, value]) => row[key] !== value))
 				row.revision = Number(row.revision) + 1;
-			Object.assign(row, {
-				group_name: group,
-				sort_order: order,
-				updated_at: new Date().toISOString(),
-			});
+			Object.assign(row, patch, { updated_at: new Date().toISOString() });
 			return friendRecord(row);
 		});
 		return c.json({ data });
+	});
+	app.post("/api/friends/:id/delete", requireAdmin, async (c) => {
+		const id = identifier(c.req.param("id"), "友链 ID");
+		await store().update((state) => {
+			writable(state, siteId());
+			const rows = collection(state, "friends");
+			if (!rows[id]) throw new ApiFailure(404, "FRIEND_NOT_FOUND", "友链不存在");
+			delete rows[id];
+		});
+		return c.json({ data: { id, deleted: true } });
 	});
 }

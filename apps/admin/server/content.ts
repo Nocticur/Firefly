@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { PostRecord } from "../shared/contracts.js";
 import type { AdminApp } from "./types.js";
 import { requireAdmin } from "./auth.js";
-import { assertSite, collection, getStore, getSiteId, type FileStore, type StoreState } from "./file-store.js";
+import { assertSite, collection, getStore, getSiteId, type FileStore, type Row, type StoreState } from "./file-store.js";
 import { ApiFailure, expectedRevision, readJson } from "./security.js";
 import { patchMetadata, validatePostSource } from "./source-document.js";
 import { ensureBaseline, importRepository } from "./repository.js";
@@ -14,6 +14,17 @@ function postFromRow(row: PostRow): PostRecord { return { ...row.data, id: row.i
 export function normalizeSlug(value: unknown): string {
 	if (typeof value !== "string" || !value || value.length > 240 || /[:*+?(){}\[\]\\%\u0000-\u0020#]/.test(value) || value.startsWith("/") || value.endsWith("/") || value.split("/").some((part) => part === "." || part === ".." || !part)) throw new ApiFailure(422, "SLUG_INVALID", "必须填写固定、无首尾斜杠的 slug；支持中文与分级路径，不接受路由通配符或百分号编码");
 	return value;
+}
+/** A title becomes the public slug, so the console never asks for one. */
+export function slugFromTitle(title: string): string {
+	const base = title.normalize("NFKC").replace(/[:*+?()[\]{}\\%#"']/g, "").replace(/\s+/g, "-").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "").slice(0, 120);
+	return base || "post";
+}
+function uniqueSlug(entities: Record<string, Row>, base: string, excludeId?: string): string {
+	const taken = new Set(Object.values(entities).filter((row) => row.kind === "post" && row.id !== excludeId).map((row) => String((row.data as PostRecord).slug)));
+	if (!taken.has(base)) return base;
+	for (let index = 2; index < 200; index++) if (!taken.has(`${base}-${index}`)) return `${base}-${index}`;
+	return `${base}-${randomUUID().slice(0, 8)}`;
 }
 function postInState(state: StoreState, siteId: string, id: string): PostRecord {
 	assertSite(state, siteId);
@@ -35,25 +46,29 @@ export async function savePost(store: FileStore, siteId: string, id: string, sou
 		const current = postInState(state, siteId, id);
 		if (current.revision !== expected) throw new ApiFailure(409, "REVISION_CONFLICT", "草稿已被另一次保存修改，请比较后重新保存", { currentRevision: current.revision, currentSource: current.source });
 		if (source === current.source) return current;
-		const slug = metadata.slug !== undefined ? normalizeSlug(metadata.slug) : current.slug;
 		const entities = collection(state, "entities");
-		if (Object.values(entities).some(row => row.kind === "post" && row.id !== id && (row.data as PostRecord).slug === slug)) throw new ApiFailure(409, "SLUG_EXISTS", "该网址已被另一篇文章使用");
+		// Until a post reaches Git its address follows its title, so the console never asks for
+		// a slug. An address that was set explicitly stays put, and publishing freezes it.
+		const autoSlug = current.publishedRevision === null && current.slug === slugFromTitle(current.title);
+		const nextSlug = metadata.slug !== undefined ? normalizeSlug(metadata.slug) : autoSlug ? uniqueSlug(entities, slugFromTitle(String(metadata.title)), id) : current.slug;
+		if (Object.values(entities).some(row => row.kind === "post" && row.id !== id && (row.data as PostRecord).slug === nextSlug)) throw new ApiFailure(409, "SLUG_EXISTS", "该网址已被另一篇文章使用");
 		appendHistory(state, current, reason);
-		const updated: PostRecord = { ...current, slug, title: String(metadata.title), published: String(metadata.published), draft: metadata.draft === true, source, metadata, revision: current.revision + 1, updatedAt: new Date().toISOString() };
+		const updated: PostRecord = { ...current, slug: nextSlug, title: String(metadata.title), published: String(metadata.published), draft: metadata.draft === true, source, metadata, revision: current.revision + 1, updatedAt: new Date().toISOString() };
 		entities[`post:${id}`] = { ...entities[`post:${id}`], data: updated, revision: updated.revision, updated_at: updated.updatedAt };
 		return updated;
 	});
 }
-export async function createPost(store: FileStore, siteId: string, source: string, slugValue: unknown, format: "md" | "mdx" = "md"): Promise<PostRecord> {
-	const slug = normalizeSlug(slugValue);
+export async function createPost(store: FileStore, siteId: string, source: string, slugValue?: unknown, format: "md" | "mdx" = "md"): Promise<PostRecord> {
 	const metadata = validatePostSource(source);
-	if (metadata.slug !== undefined && metadata.slug !== slug) throw new ApiFailure(422, "SLUG_MISMATCH", "源码 slug 与固定网址不一致");
+	const explicit = slugValue === undefined || slugValue === null || slugValue === "" ? undefined : normalizeSlug(slugValue);
+	if (explicit !== undefined && metadata.slug !== undefined && metadata.slug !== explicit) throw new ApiFailure(422, "SLUG_MISMATCH", "源码 slug 与固定网址不一致");
 	const id = randomUUID();
-	const record: PostRecord = { id, filePath: `src/content/posts/managed/${id}.${format}`, slug, title: String(metadata.title), published: String(metadata.published), draft: metadata.draft === true, format, source, metadata, revision: 1, publishedRevision: null, publishedSource: null, updatedAt: new Date().toISOString() };
+	const record: PostRecord = { id, filePath: `src/content/posts/managed/${id}.${format}`, slug: explicit ?? "", title: String(metadata.title), published: String(metadata.published), draft: metadata.draft === true, format, source, metadata, revision: 1, publishedRevision: null, publishedSource: null, updatedAt: new Date().toISOString() };
 	return store.update((state) => {
 		assertSite(state, siteId);
 		const entities = collection(state, "entities");
-		if (Object.values(entities).some(row => row.kind === "post" && (row.data as PostRecord).slug === slug)) throw new ApiFailure(409, "SLUG_EXISTS", "该固定网址已被另一篇文章使用");
+		if (explicit !== undefined && Object.values(entities).some(row => row.kind === "post" && (row.data as PostRecord).slug === explicit)) throw new ApiFailure(409, "SLUG_EXISTS", "该固定网址已被另一篇文章使用");
+		record.slug = explicit ?? uniqueSlug(entities, slugFromTitle(String(metadata.slug ?? metadata.title)));
 		entities[`post:${id}`] = { id, kind: "post", data: record, revision: 1, created_at: record.updatedAt, updated_at: record.updatedAt };
 		return record;
 	});
@@ -70,6 +85,29 @@ export async function restorePostVersion(store: FileStore, siteId: string, id: s
 	const version = collection(state, "entities")[`post_version:${versionId}`]?.data as PostVersion | undefined;
 	if (!version || version.postId !== id) throw new ApiFailure(404, "VERSION_NOT_FOUND", "历史版本不存在");
 	return savePost(store, siteId, id, version.source, expected, `restore:${versionId}`);
+}
+
+/**
+ * Deleting a post that already reached Git cannot simply forget it: the next release must
+ * delete the file too, otherwise the article stays live on the site. A tombstone carries the
+ * path until a release commits the removal, after which it is discarded.
+ */
+export async function deletePost(store: FileStore, siteId: string, id: string): Promise<{ id: string; title: string; published: boolean; pendingGitDeletion: boolean }> {
+	return store.update((state) => {
+		assertSite(state, siteId);
+		const entities = collection(state, "entities");
+		const row = entities[`post:${id}`] as PostRow | undefined;
+		if (!row) throw new ApiFailure(404, "POST_NOT_FOUND", "文章不存在");
+		const post = postFromRow(row);
+		delete entities[`post:${id}`];
+		for (const [key, item] of Object.entries(entities)) if (item.kind === "post_version" && (item.data as PostVersion).postId === id) delete entities[key];
+		const published = post.publishedRevision !== null;
+		if (published) {
+			const now = new Date().toISOString();
+			entities[`post_deletion:${id}`] = { id, kind: "post_deletion", data: { id, filePath: post.filePath, slug: post.slug, title: post.title, deletedAt: now }, revision: 1, created_at: now, updated_at: now };
+		}
+		return { id, title: post.title, published, pendingGitDeletion: published };
+	});
 }
 
 export function registerContentRoutes(app: AdminApp) {
@@ -107,5 +145,6 @@ export function registerContentRoutes(app: AdminApp) {
 		if (typeof body.versionId !== "string") throw new ApiFailure(422, "VERSION_REQUIRED", "必须提供 versionId");
 		return context.json({ data: await restorePostVersion(getStore(), getSiteId(), context.req.param("id"), body.versionId, expectedRevision(body.expectedRevision)) });
 	});
+	app.post("/api/posts/:id/delete", requireAdmin, async (context) => context.json({ data: await deletePost(getStore(), getSiteId(), context.req.param("id")) }));
 	app.post("/api/import", requireAdmin, async (context) => context.json({ data: await importRepository(getStore(), getSiteId()) }));
 }

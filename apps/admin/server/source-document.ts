@@ -31,7 +31,7 @@ export function parseSourceDocument(source: string): SourceDocument {
 	return { source, metadata: metadata as Record<string, unknown>, body: source.slice(match.index + match[0].length), frontmatter, frontmatterStart: start, frontmatterEnd: match.index, newline: opening[1] };
 }
 
-const metadataFields = new Set(["title", "published", "description", "category", "tags", "draft", "pinned", "comment", "image", "slug"]);
+const metadataFields = new Set(["title", "published", "description", "category", "tags", "draft", "pinned", "comment", "image", "slug", "password", "passwordHint"]);
 export function patchMetadata(source: string, patch: Record<string, unknown>): string {
 	const parsed = parseSourceDocument(source);
 	for (const [key, value] of Object.entries(patch)) {

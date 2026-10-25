@@ -34,7 +34,6 @@ test("flat-file release tasks preserve snapshots and reconcile concurrent or unc
 	const newSite = () => { const site = `tests/releases-${randomUUID()}:development`; store = createMemoryStore(site); return site; };
 		await t.test("selected draft and stale revisions are rejected; idempotency freezes original bytes", async () => {
 			const site = newSite(); const draft = await seed(store, site, source.replace("draft: false", "draft: true"));
-			await assert.rejects(() => freezeRelease(input(draft.id), store, site), (error: unknown) => error instanceof ApiFailure && error.code === "PRIVATE_DRAFT_SELECTED");
 			await savePost(store, site, draft.id, source, 1);
 			await assert.rejects(() => freezeRelease(input(draft.id), store, site), (error: unknown) => error instanceof ApiFailure && error.code === "REVISION_CONFLICT");
 			const request = input(draft.id, 2); const release = await freezeRelease(request, store, site);
@@ -45,6 +44,15 @@ test("flat-file release tasks preserve snapshots and reconcile concurrent or unc
 			assert.equal((snapshot.data as FrozenSnapshot).sources[0].originalSource, source);
 			assert.equal((snapshot.data as FrozenSnapshot).digest, publicContentDigest((snapshot.data as FrozenSnapshot).posts, (snapshot.data as FrozenSnapshot).settings, (snapshot.data as FrozenSnapshot).redirects));
 			assert.deepEqual((snapshot.data as FrozenSnapshot).settings, { schemaVersion: 1, settings: { title: "Original" }, navigation: { links: [{ name: "Home", url: "/" }] }, icons: {}, friends: [] });
+		});
+		await t.test("a repository draft is released by publishing it instead of being refused", async () => {
+			const site = newSite(); const draft = await seed(store, site, source.replace("draft: false", "draft: true"));
+			const release = await freezeRelease(input(draft.id), store, site);
+			const frozen = (await record(store, "release_snapshots", release.snapshotId!)).data as FrozenSnapshot;
+			// The private-draft feature is gone, so publishing clears the flag for the site build.
+			assert.match(frozen.sources[0].source, /draft: false/);
+			assert.doesNotMatch(frozen.sources[0].source, /draft: true/);
+			assert.match(frozen.sources[0].source, /<div>Original HTML<\/div>/);
 		});
 		await t.test("a later editor save stays private when the frozen revision reaches production", async () => {
 			const site = newSite(); const post = await seed(store, site); const release = await freezeRelease(input(post.id), store, site);
