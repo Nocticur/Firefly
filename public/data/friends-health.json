@@ -1,45 +1,45 @@
 {
   "schemaVersion": 1,
-  "checkedAt": "2026-10-19T10:44:01.945Z",
+  "checkedAt": "2026-10-25T09:47:31.376Z",
   "results": [
     {
       "url": "https://blog.cuteleaf.cn",
       "name": "夏夜流萤",
-      "status": "slow",
-      "latencyMs": 2428,
+      "status": "success",
+      "latencyMs": 1570,
       "statusCode": 200,
       "consecutiveFailures": 0,
       "backlink": "unchecked",
-      "checkedAt": "2026-10-19T10:44:01.944Z",
+      "checkedAt": "2026-10-25T09:47:31.375Z",
       "screenshot": "/assets/friends/f006b20de01683841d4b534b.webp",
-      "screenshotAt": "2026-10-19T10:44:30.217Z",
-      "lastSuccessAt": "2026-10-19T10:44:01.944Z"
+      "screenshotAt": "2026-10-25T09:48:00.419Z",
+      "lastSuccessAt": "2026-10-25T09:47:31.375Z"
     },
     {
       "url": "https://docs-firefly.cuteleaf.cn",
       "name": "Firefly Docs",
       "status": "success",
-      "latencyMs": 1875,
+      "latencyMs": 809,
       "statusCode": 200,
       "consecutiveFailures": 0,
       "backlink": "unchecked",
-      "checkedAt": "2026-10-19T10:44:01.313Z",
+      "checkedAt": "2026-10-25T09:47:30.511Z",
       "screenshot": "/assets/friends/75bbabe244524a098e02a5b8.webp",
-      "screenshotAt": "2026-10-19T10:44:34.614Z",
-      "lastSuccessAt": "2026-10-19T10:44:01.313Z"
+      "screenshotAt": "2026-10-25T09:48:05.572Z",
+      "lastSuccessAt": "2026-10-25T09:47:30.511Z"
     },
     {
       "url": "https://github.com/withastro/astro",
       "name": "Astro",
       "status": "success",
-      "latencyMs": 1627,
+      "latencyMs": 657,
       "statusCode": 200,
       "consecutiveFailures": 0,
       "backlink": "unchecked",
-      "checkedAt": "2026-10-19T10:44:01.149Z",
+      "checkedAt": "2026-10-25T09:47:30.497Z",
       "screenshot": "/assets/friends/641875415b61f75444d31fee.webp",
-      "screenshotAt": "2026-10-19T10:44:36.790Z",
-      "lastSuccessAt": "2026-10-19T10:44:01.149Z"
+      "screenshotAt": "2026-10-25T09:48:07.410Z",
+      "lastSuccessAt": "2026-10-25T09:47:30.497Z"
     }
   ]
 }
