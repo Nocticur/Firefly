@@ -5,6 +5,7 @@ import { ApiFailure, digest } from "./security.js";
 import { validatePostSource } from "./source-document.js";
 import { readRepositoryFiles, personalToken, GitHubError } from "./github.js";
 import { deriveManagedSettings, MANAGED_SETTINGS_PATH } from "./managed-settings.js";
+import { ledgerFromBaseline, repositoryLedger } from "./release-format.js";
 
 type SourceFile = { path: string; source: string };
 type RepositoryReader = (sha?: string) => Promise<Awaited<ReturnType<typeof readRepositoryFiles>>>;
@@ -109,7 +110,7 @@ export async function importRepository(store: FileStore, siteId: string, reader:
 		const now = new Date().toISOString();
 		for (const kind of ["settings", "navigation"] as const) entities[`${kind}:default`] = { id: "default", kind, data: managed[kind], revision: 1, created_at: now, updated_at: now };
 		if (isRecord(managed.icons)) entities["icons:default"] = { id: "default", kind: "icons", data: managed.icons, revision: 1, created_at: now, updated_at: now };
-		const baseline = { headSha: repository.headSha, repositoryFiles: files, snapshotId: isRecord(publishedState) ? publishedState.snapshotId || null : null, importedAt: new Date().toISOString(), importedPosts: posts.length, publishedSettings: managed.settings, publishedNavigation: managed.navigation, publishedIcons: managed.icons || {}, settingsSource: managed.source, publishedState: publishedState || null, posts: mapping, redirects: Array.isArray(redirects) ? redirects : [], ...(deploymentConfig !== undefined ? { deploymentConfig } : {}) };
+		const baseline = { headSha: repository.headSha, repositoryLedger: repositoryLedger(files), snapshotId: isRecord(publishedState) ? publishedState.snapshotId || null : null, importedAt: new Date().toISOString(), importedPosts: posts.length, publishedSettings: managed.settings, publishedNavigation: managed.navigation, publishedIcons: managed.icons || {}, settingsSource: managed.source, publishedState: publishedState || null, posts: mapping, redirects: Array.isArray(redirects) ? redirects : [], ...(deploymentConfig !== undefined ? { deploymentConfig } : {}) };
 		entities["repository:baseline"] = { id: "baseline", kind: "repository", data: baseline, revision: 1, created_at: now, updated_at: now };
 		return { imported: true, headSha: repository.headSha, records: posts.length, publicPosts: posts.filter((file) => validatePostSource(file.source).draft !== true).length };
 	});
@@ -125,7 +126,25 @@ export type RepositoryDifference = { path: string; expectedSource: string | null
 let priming: Promise<unknown> | null = null;
 export async function ensureBaseline(store: FileStore, siteId: string): Promise<void> {
 	try {
-		if (collection(await store.read(), "entities")["repository:baseline"]) return;
+		const baseline = collection(await store.read(), "entities")["repository:baseline"] as (Row & { data: Record<string, unknown> }) | undefined;
+		if (baseline) {
+			// One-off migration: older baselines stored every repository file's full source,
+			// which dominated the stored document. Hashes carry the same meaning.
+			if (Array.isArray(baseline.data.repositoryFiles) && !Array.isArray(baseline.data.repositoryLedger)) {
+				const ledger = ledgerFromBaseline(baseline.data);
+				const headSha = baseline.data.headSha;
+				if (ledger) await store.update((state) => {
+					assertSite(state, siteId);
+					const row = collection(state, "entities")["repository:baseline"] as (Row & { data: Record<string, unknown> }) | undefined;
+					if (!row || row.data.headSha !== headSha || !Array.isArray(row.data.repositoryFiles) || Array.isArray(row.data.repositoryLedger)) return;
+					const next = { ...row.data };
+					delete next.repositoryFiles;
+					row.data = { ...next, repositoryLedger: ledger };
+					row.updated_at = new Date().toISOString();
+				});
+			}
+			return;
+		}
 	} catch { return; }
 	// The failure is surfaced rather than logged: a bad token used to leave the admin
 	// looking empty, which is indistinguishable from a repository that has no content.
@@ -148,24 +167,32 @@ export async function synchronizeRepository(store: FileStore, siteId: string, ex
 	if (initial.data.headSha !== expectedHeadSha) throw new ApiFailure(409, "BASELINE_REVISION_CONFLICT", "仓库基线已变化，请刷新后重新核对");
 	const remote = await reader();
 	if (!/^[a-f0-9]{40}$/i.test(remote.headSha)) throw new ApiFailure(503, "REPOSITORY_REVISION_INVALID", "远端未返回有效 Git 版本");
-	// Earlier baselines do not store a file ledger. Read their immutable Git tree,
-	// never current master, rather than inventing an empty or mutable baseline.
-	let evidence: SourceFile[];
-	if (Array.isArray(initial.data.repositoryFiles)) evidence = initial.data.repositoryFiles as SourceFile[];
-	else {
+	// The baseline records only file hashes, so comparing is cheap. The immutable Git tree
+	// at the baseline revision is fetched lazily — only when something actually changed —
+	// so the UI can still show a per-file diff without storing every source.
+	let evidenceFiles: SourceFile[] | null = null;
+	const readEvidence = async (): Promise<SourceFile[]> => {
+		if (evidenceFiles) return evidenceFiles;
 		const historical = await reader(expectedHeadSha);
 		if (historical.headSha !== expectedHeadSha) throw new ApiFailure(409, "BASELINE_EVIDENCE_INVALID", "未能读取基线的固定 Git 版本，拒绝同步");
-		evidence = historical.files;
-	}
-	if (evidence.some((file) => !isRecord(file) || typeof file.path !== "string" || typeof file.source !== "string") || new Set(evidence.map((file) => file.path)).size !== evidence.length) throw new ApiFailure(409, "BASELINE_EVIDENCE_INVALID", "基线文件证据不完整，保留草稿并人工检查");
-	const differences = compareRepositoryFiles(evidence, remote.files);
+		evidenceFiles = historical.files;
+		return evidenceFiles;
+	};
+	const expectedLedger = ledgerFromBaseline(initial.data);
+	if (!expectedLedger) await readEvidence();
+	const expectedHashes = new Map((expectedLedger ?? repositoryLedger(evidenceFiles!)).map((entry) => [entry.path, entry.sha256]));
+	const remoteHashes = new Map(repositoryLedger(remote.files).map((entry) => [entry.path, entry.sha256]));
+	const changed = [...new Set([...expectedHashes.keys(), ...remoteHashes.keys()])].filter((path) => expectedHashes.get(path) !== remoteHashes.get(path));
+	const differences = changed.length ? compareRepositoryFiles(await readEvidence(), remote.files) : [];
 	return store.update((state) => {
 		assertSite(state, siteId);
 		const current = collection(state, "entities")["repository:baseline"] as (Row & { data: Record<string, unknown> }) | undefined;
 		if (current?.data.headSha !== expectedHeadSha) throw new ApiFailure(409, "BASELINE_REVISION_CONFLICT", "核对期间仓库基线已变化，请重新读取");
 		if (Object.values(collection(state, "release_tasks")).some(row => row.kind === "publish" && (!["verified", "failed", "conflict"].includes(String(row.state)) || (row.details as Row | undefined)?.restoreRequiresReconciliation === true))) throw new ApiFailure(409, "PUBLISH_RECONCILIATION_REQUIRED", "先核查所有未完成或恢复的发布，再同步代码基线");
 		if (differences.length) throw new ApiFailure(409, "MANAGED_REPOSITORY_CONFLICT", "远端管理内容已变更；请审阅逐文件差异并通过独立合并处理，未推进基线且保留全部私有草稿", { baseSha: expectedHeadSha, remoteSha: remote.headSha, diff: differences });
-		current.data = { ...current.data, headSha: remote.headSha, repositoryFiles: remote.files, synchronizedAt: new Date().toISOString() };
+		const next = { ...current.data };
+		delete next.repositoryFiles;
+		current.data = { ...next, headSha: remote.headSha, repositoryLedger: repositoryLedger(remote.files), synchronizedAt: new Date().toISOString() };
 		current.updated_at = new Date().toISOString(); current.revision = Number(current.revision) + 1;
 		return { synchronized: true, previousHeadSha: expectedHeadSha, headSha: remote.headSha, managedFiles: remote.files.length, message: "已确认管理文件字节完全相同，代码基线已同步；所有私有草稿保持原版本" };
 	});

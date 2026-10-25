@@ -18,6 +18,22 @@ export function canonicalJson(value: unknown): string {
 	return encoded;
 }
 export const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
+/**
+ * The baseline only needs to know whether a repository file changed, not what it contains.
+ * Keeping sources there cost megabytes in the single stored document, so it keeps hashes.
+ */
+export type RepositoryLedgerEntry = { path: string; sha256: string };
+export function repositoryLedger(files: Array<{ path: string; source: string }>): RepositoryLedgerEntry[] {
+	return files.map((file) => ({ path: file.path, sha256: sha256(file.source) }));
+}
+export function ledgerFromBaseline(data: Record<string, unknown>): RepositoryLedgerEntry[] | null {
+	const stored = data.repositoryLedger;
+	if (Array.isArray(stored) && stored.every((entry) => entry && typeof entry === "object" && typeof (entry as RepositoryLedgerEntry).path === "string" && typeof (entry as RepositoryLedgerEntry).sha256 === "string")) return stored as RepositoryLedgerEntry[];
+	// Baselines written before the ledger existed carry every file source; convert on read.
+	const legacy = data.repositoryFiles;
+	if (Array.isArray(legacy) && legacy.every((file) => file && typeof file === "object" && typeof (file as { path?: unknown }).path === "string" && typeof (file as { source?: unknown }).source === "string")) return repositoryLedger(legacy as Array<{ path: string; source: string }>);
+	return null;
+}
 export function publicContentDigest(posts: PublishedPost[], settings: Record<string, unknown>, redirects: Redirect[]): string {
 	return sha256(canonicalJson({ posts: [...posts].sort((a, b) => compareCodePoints(a.id, b.id)), settings, redirects: [...redirects].sort((a, b) => compareCodePoints(a.from, b.from)) }));
 }

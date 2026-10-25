@@ -4,9 +4,10 @@ import { randomUUID } from "node:crypto";
 import { createMemoryStore, collection } from "../server/file-store.js";
 import { createPost, deletePost, getPost, savePost, listPostHistory, restorePostVersion } from "../server/content.js";
 import { freezeRelease } from "../server/releases.js";
-import { importRepository, synchronizeRepository, compareRepositoryFiles } from "../server/repository.js";
+import { ensureBaseline, importRepository, synchronizeRepository, compareRepositoryFiles } from "../server/repository.js";
 import { getManagedEntity, saveManagedEntity } from "../server/settings.js";
 import { ApiFailure, digest } from "../server/security.js";
+import { repositoryLedger } from "../server/release-format.js";
 
 const source = '---\n# original YAML comment\ntitle: "旧标题"\npublished: 2026-09-10\ndraft: false\nunknown: { keep: [1, 2] }\n---\n<div>literal HTML</div>\n\nbody\n';
 const firstSha = "a".repeat(40);
@@ -123,11 +124,34 @@ test("repository synchronization preserves drafts, detects byte changes, and blo
 	assert.deepEqual(await getPost(store, site, id), before);
 	assert.deepEqual(await listPostHistory(store, site, id), history);
 	await assert.rejects(synchronizeRepository(store, site, firstSha, async () => repository), failure("BASELINE_REVISION_CONFLICT"));
-	await assert.rejects(synchronizeRepository(store, site, nextSha, async () => ({ ...repository, headSha: "c".repeat(40), files: repository.files.map(file => file.path.endsWith("original.md") ? { ...file, source: file.source + "external\n" } : file) })), failure("MANAGED_REPOSITORY_CONFLICT"));
+	await assert.rejects(synchronizeRepository(store, site, nextSha, async (sha) => sha === nextSha
+		? { ...repository, headSha: nextSha }
+		: { ...repository, headSha: "c".repeat(40), files: repository.files.map(file => file.path.endsWith("original.md") ? { ...file, source: file.source + "external\n" } : file) }), failure("MANAGED_REPOSITORY_CONFLICT"));
 	await store.update(state => { collection(state, "release_tasks").uncertain = { id: "uncertain", kind: "publish", state: "unknown", details: {} }; });
 	await assert.rejects(synchronizeRepository(store, site, nextSha, async () => ({ ...repository, headSha: "c".repeat(40) })), failure("PUBLISH_RECONCILIATION_REQUIRED"));
 	await store.update(state => { collection(state, "release_tasks").uncertain.state = "failed"; collection(state, "release_tasks").uncertain.details = { restoreRequiresReconciliation: true }; });
 	await assert.rejects(synchronizeRepository(store, site, nextSha, async () => ({ ...repository, headSha: "c".repeat(40) })), failure("PUBLISH_RECONCILIATION_REQUIRED"));
+});
+
+test("the baseline keeps hashes instead of file sources and migrates old baselines", async () => {
+	const site = "tests/ledger:development"; const store = createMemoryStore(site);
+	const repository = fixture();
+	await importRepository(store, site, async () => repository);
+	const imported = collection(await store.read(), "entities")["repository:baseline"].data as Record<string, unknown>;
+	// Sources would make the single stored document megabytes; hashes carry the same meaning.
+	assert.equal(imported.repositoryFiles, undefined);
+	const ledger = imported.repositoryLedger as Array<{ path: string; sha256: string }>;
+	assert.equal(ledger.length, repository.files.length);
+	assert.equal(ledger.find((entry) => entry.path === "src/content/posts/original.md")!.sha256, digest(source));
+	// No file body is stored, and the ledger is smaller than the sources it replaces.
+	assert.ok(!JSON.stringify(ledger).includes("Original YAML comment"));
+	assert.ok(JSON.stringify(ledger).length < JSON.stringify(repository.files).length);
+	// A baseline written before the ledger existed is rewritten in place on the next open.
+	await store.update(state => { const data = collection(state, "entities")["repository:baseline"].data as Record<string, unknown>; delete data.repositoryLedger; data.repositoryFiles = repository.files; });
+	await ensureBaseline(store, site);
+	const migrated = collection(await store.read(), "entities")["repository:baseline"].data as Record<string, unknown>;
+	assert.equal(migrated.repositoryFiles, undefined);
+	assert.deepEqual((migrated.repositoryLedger as Array<{ path: string }>).map((entry) => entry.path), repository.files.map((file) => file.path));
 });
 
 test("managed file comparison detects additions/removals and exact newline bytes", () => {
@@ -151,13 +175,13 @@ test("initial import retains MDX bytes and does not publish a repository draft",
 test("older baselines use immutable Git evidence and reject an advancing baseline during fetch", async () => {
 	const site = "tests/history-sync:development"; const store = createMemoryStore(site); const original = fixture();
 	await importRepository(store, site, async () => original);
-	await store.update(state => { delete (collection(state, "entities")["repository:baseline"].data as Record<string, unknown>).repositoryFiles; });
+	await store.update(state => { delete (collection(state, "entities")["repository:baseline"].data as Record<string, unknown>).repositoryLedger; });
 	const reads: Array<string | undefined> = [];
 	await synchronizeRepository(store, site, firstSha, async sha => { reads.push(sha); return sha === firstSha ? original : { ...original, headSha: nextSha }; });
 	assert.deepEqual(reads, [undefined, firstSha]);
-	await store.update(state => { const baseline = collection(state, "entities")["repository:baseline"].data as Record<string, unknown>; baseline.headSha = firstSha; delete baseline.repositoryFiles; });
+	await store.update(state => { const baseline = collection(state, "entities")["repository:baseline"].data as Record<string, unknown>; baseline.headSha = firstSha; delete baseline.repositoryLedger; });
 	await assert.rejects(synchronizeRepository(store, site, firstSha, async () => ({ ...original, headSha: nextSha })), failure("BASELINE_EVIDENCE_INVALID"));
-	await store.update(state => { (collection(state, "entities")["repository:baseline"].data as Record<string, unknown>).repositoryFiles = original.files; });
+	await store.update(state => { (collection(state, "entities")["repository:baseline"].data as Record<string, unknown>).repositoryLedger = repositoryLedger(original.files); });
 	await assert.rejects(synchronizeRepository(store, site, firstSha, async () => {
 		await store.update(state => { (collection(state, "entities")["repository:baseline"].data as Record<string, unknown>).headSha = "c".repeat(40); });
 		return { ...original, headSha: nextSha };

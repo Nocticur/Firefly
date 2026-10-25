@@ -8,7 +8,7 @@ import { storageConfig } from "./storage-config.js";
 import { ApiFailure, requireProduction, readJson } from "./security.js";
 import { serviceEnabled } from "./service-settings.js";
 import { githubProvider, GitHubError, personalToken, type GitHubProvider, type RepositoryFile } from "./github.js";
-import { assertDeploymentConfigRedirects, buildDeploymentConfig, canonicalJson, publicContentDigest, publicSettings, publishedSource, sha256, type PublishedPost, type Redirect } from "./release-format.js";
+import { assertDeploymentConfigRedirects, buildDeploymentConfig, canonicalJson, publicContentDigest, publicSettings, publishedSource, repositoryLedger, sha256, type PublishedPost, type Redirect, type RepositoryLedgerEntry } from "./release-format.js";
 import { publishWorkflow } from "../workflows/publish.js";
 import { requireAdmin } from "./auth.js";
 import { synchronizeRepository } from "./repository.js";
@@ -24,7 +24,7 @@ export type FrozenSnapshot = {
 	media?: Record<string, Row & { id: string; publishedUrl: string; pathname?: string; digest: string; size: number; contentType: string; revision: number }>;
 	originalSettings?: Record<string, unknown>;
 	deploymentConfig?: Record<string, unknown>;
-	repositoryFiles?: RepositoryFile[];
+	repositoryLedger?: RepositoryLedgerEntry[];
 };
 const mediaPattern = /(?:media:([a-zA-Z0-9-]+)|\/api\/media\/([a-zA-Z0-9-]+)\/content)/g;
 function referencedMedia(sources: FrozenSnapshot["sources"], settings: Record<string, unknown>): string[] {
@@ -379,7 +379,9 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 			const committedFiles = new Map(repository.files.map((file) => [file.path, file]));
 			for (const path of snapshot.deletions) committedFiles.delete(path);
 			for (const file of snapshot.files) committedFiles.set(file.path, file);
-			snapshot.repositoryFiles = [...committedFiles.values()];
+			// Keep hashes, not sources: the ledger is all the baseline and snapshot need, and
+			// full file copies were the bulk of the stored document.
+			snapshot.repositoryLedger = repositoryLedger([...committedFiles.values()]);
 			await retainLease();
 			const committing = await store.update((state) => {
 				assertSite(state, site); if (!updateTaskState(state, site, id, fence, "committing")) return false;
@@ -410,7 +412,7 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 			}
 			if (!updateTaskState(state, site, id, fence, "verified", { productionSha: target, deploymentId: verified.deploymentId, message: "Git、目标项目生产别名及两处发布清单已核验一致", details: { ...(restored ? { restoreRequiresReconciliation: false } : {}), finalizationState: initial.details?.restored ? "skipped" : "pending" } })) return false;
 			for (const source of snapshot.sources) { const post = entities[`post:${source.id}`]; if (post) { post.data = { ...(post.data as Row), publishedSource: source.source, publishedRevision: source.revision }; post.updated_at = new Date().toISOString(); } }
-			if (baseline && base) { delete base.repositoryFiles; Object.assign(base, { headSha: target, posts: snapshot.posts, redirects: snapshot.redirects, snapshotId: snapshot.id, taskId: id, publicContentDigest: snapshot.digest, publishedSettings: snapshot.settings.settings, publishedNavigation: snapshot.settings.navigation, publishedIcons: snapshot.settings.icons, ...(snapshot.repositoryFiles ? { repositoryFiles: snapshot.repositoryFiles } : {}), ...(snapshot.deploymentConfig ? { deploymentConfig: snapshot.deploymentConfig } : {}) }); baseline.updated_at = new Date().toISOString(); }
+			if (baseline && base) { delete base.repositoryFiles; Object.assign(base, { headSha: target, posts: snapshot.posts, redirects: snapshot.redirects, snapshotId: snapshot.id, taskId: id, publicContentDigest: snapshot.digest, publishedSettings: snapshot.settings.settings, publishedNavigation: snapshot.settings.navigation, publishedIcons: snapshot.settings.icons, ...(snapshot.repositoryLedger ? { repositoryLedger: snapshot.repositoryLedger } : {}), ...(snapshot.deploymentConfig ? { deploymentConfig: snapshot.deploymentConfig } : {}) }); baseline.updated_at = new Date().toISOString(); }
 			// The removal is now committed, so the tombstone no longer has to gate a release.
 			for (const path of snapshot.deletions) for (const [key, row] of Object.entries(entities)) if (row.kind === "post_deletion" && (row.data as Row).filePath === path) delete entities[key];
 			const lock = collection(state, "release_locks")[site]!; lock.task_id = null; lock.lease_until = new Date().toISOString(); return true;
