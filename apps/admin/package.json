@@ -20,6 +20,7 @@
     "@tiptap/extension-mathematics": "3.31.4",
     "@tiptap/extension-table": "3.31.4",
     "@tiptap/markdown": "3.31.4",
+    "@tiptap/pm": "3.31.4",
     "@tiptap/react": "3.31.4",
     "@tiptap/starter-kit": "3.31.4",
     "hono": "4.13.13",
