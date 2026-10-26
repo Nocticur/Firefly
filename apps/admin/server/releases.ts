@@ -58,7 +58,7 @@ export function taskRecord(row: Row): TaskRecord {
 const releaseInput = z.object({ postIds: z.array(z.string().min(1)).max(200), expectedRevisions: z.record(z.string(), z.number().int().nonnegative()), idempotencyKey: z.string().min(8).max(200) });
 export async function freezeRelease(input: z.infer<typeof releaseInput>, store = getStore(), site = getSiteId()): Promise<TaskRecord> {
 	const taskId = randomUUID(); const snapshotId = randomUUID();
-	return store.update((state) => {
+	return store.updateBoth((state, cold) => {
 		assertSite(state, site);
 		if (restoreActive(state)) throw new ApiFailure(409, "RESTORE_IN_PROGRESS", "恢复进行中，暂不能冻结发布");
 		const tasks = collection(state, "release_tasks");
@@ -141,7 +141,7 @@ export async function freezeRelease(input: z.infer<typeof releaseInput>, store =
 		snapshot.originalSettings = structuredClone(settings);
 		for (const file of files) if (!(file.path === "vercel.json" || /^src\/(?:content\/posts\/[^\0]+\.mdx?|data\/(?:published-state|managed-settings|redirects)\.json)$/.test(file.path)) || file.path.split("/").includes("..")) throw new ApiFailure(400, "UNSAFE_REPOSITORY_PATH", "发布路径不在允许的内容目录");
 		const now = new Date().toISOString();
-		collection(state, "release_snapshots")[snapshotId] = { id: snapshotId, digest, data: snapshot, created_at: now };
+		collection(cold, "release_snapshots")[snapshotId] = { id: snapshotId, digest, data: snapshot, created_at: now };
 		const task: ReleaseTaskRow = { id: taskId, kind: "publish", idempotency_key: input.idempotencyKey, state: "preparing", snapshot_id: snapshotId, base_sha: base.headSha, target_sha: null, production_sha: null, deployment_id: null, message: null, details: {}, fence: null, created_at: now, updated_at: now };
 		tasks[taskId] = task;
 		collection(state, "release_locks")[site] ||= { task_id: null, fencing_token: 0, lease_until: now };
@@ -193,7 +193,7 @@ async function renewReleaseLease(store: FileStore, site: string, id: string, fen
 	return store.update((state) => { assertSite(state, site); if (!ownedLease(state, site, id, fence)) return false; collection(state, "release_locks")[site]!.lease_until = new Date(Date.now()+150_000).toISOString(); return true; });
 }
 async function releaseRow(store: FileStore, site: string, id: string): Promise<ReleaseTaskRow | undefined> { const state = await store.read(); assertSite(state, site); return collection(state, "release_tasks")[id] as ReleaseTaskRow | undefined; }
-async function snapshotRow(store: FileStore, site: string, id: string): Promise<Row | undefined> { const state = await store.read(); assertSite(state, site); return collection(state, "release_snapshots")[id]; }
+async function snapshotRow(store: FileStore, site: string, id: string): Promise<Row | undefined> { const state = await store.readCold(); assertSite(state, site); return collection(state, "release_snapshots")[id]; }
 
 function refreshSnapshotFiles(snapshot: FrozenSnapshot): void {
 	snapshot.posts = snapshot.sources.map(({ id, filePath, slug, source }) => ({ id, filePath, slug, sourceSha256: sha256(source) }));
@@ -265,7 +265,7 @@ function releaseFinalized(task: ReleaseTaskRow): boolean {
 async function prunePublishedHistory(store: FileStore, site: string, snapshot: FrozenSnapshot): Promise<void> {
 	const published = new Set(snapshot.sources.map((source) => source.id));
 	if (!published.size) return;
-	await store.update((state) => {
+	await store.updateCold((state) => {
 		assertSite(state, site);
 		const entities = collection(state, "entities");
 		for (const [key, row] of Object.entries(entities)) {
@@ -352,9 +352,9 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 				snapshot.settings = replaceMedia(snapshot.settings, urls) as Record<string, unknown>;
 			}
 			refreshSnapshotFiles(snapshot);
-			const frozen = await store.update((state) => {
+			const frozen = await store.updateBoth((state, cold) => {
 				assertSite(state, site); if (!updateTaskState(state, site, id, fence, "frozen")) return false;
-				Object.assign(collection(state, "release_snapshots")[snapshot.id]!, { digest: snapshot.digest, data: snapshot }); return true;
+				Object.assign(collection(cold, "release_snapshots")[snapshot.id]!, { digest: snapshot.digest, data: snapshot }); return true;
 			});
 			if (!frozen) return persistedState();
 			task.state = "frozen";
@@ -383,9 +383,9 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 			// full file copies were the bulk of the stored document.
 			snapshot.repositoryLedger = repositoryLedger([...committedFiles.values()]);
 			await retainLease();
-			const committing = await store.update((state) => {
+			const committing = await store.updateBoth((state, cold) => {
 				assertSite(state, site); if (!updateTaskState(state, site, id, fence, "committing")) return false;
-				collection(state, "release_snapshots")[snapshot.id]!.data = snapshot; return true;
+				collection(cold, "release_snapshots")[snapshot.id]!.data = snapshot; return true;
 			});
 			if (!committing) return persistedState();
 			// Persist the intention before the only non-idempotent external side effect.

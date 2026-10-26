@@ -64,7 +64,10 @@ export async function importRepository(store: FileStore, siteId: string, reader:
 	if (!Object.keys(managed.settings).length && !derivedLinks.length) throw new ApiFailure(503, "BASELINE_CONFIGURATION_REQUIRED", `仓库须包含 ${MANAGED_SETTINGS_PATH} 或可解析的 src/config/siteConfig.ts；不能用空配置替换主题`);
 	const posts = files.filter((file) => /^src\/content\/posts\/.+\.(md|mdx)$/.test(file.path));
 	if (!posts.length) throw new ApiFailure(422, "REPOSITORY_POSTS_MISSING", "GitHub 仓库没有读取到文章源码");
-	return store.update((state) => {
+	// History rows that still sit in the hot document must move to the cold one first, so the
+	// stable-id mapping below cannot miss them.
+	await store.readCold();
+	return store.updateBoth((state, cold) => {
 		assertSite(state, siteId);
 		const entities = collection(state, "entities");
 		const existing = entities["repository:baseline"] as (Row & { data: Record<string, unknown> }) | undefined;
@@ -96,7 +99,8 @@ export async function importRepository(store: FileStore, siteId: string, reader:
 				if (targetId !== String(adopted.id)) {
 					if (entities[`post:${targetId}`]) throw new ApiFailure(409, "BASELINE_IMPORT_CONFLICT", "本地草稿与仓库文章的稳定 ID 冲突，请人工核对");
 					delete entities[`post:${String(adopted.id)}`];
-					for (const row of Object.values(entities)) if (row.kind === "post_version" && (row.data as { postId?: unknown }).postId === adopted.id) (row.data as { postId?: string }).postId = targetId;
+					const coldEntities = collection(cold, "entities");
+					for (const row of Object.values(coldEntities)) if (row.kind === "post_version" && (row.data as { postId?: unknown }).postId === adopted.id) (row.data as { postId?: string }).postId = targetId;
 				}
 				entities[`post:${targetId}`] = { ...adopted, id: targetId, data: { ...adopted.data, id: targetId, filePath: file.path } };
 				continue;
@@ -143,6 +147,8 @@ export async function ensureBaseline(store: FileStore, siteId: string): Promise<
 					row.updated_at = new Date().toISOString();
 				});
 			}
+			// Touching the cold document migrates history and snapshots out of the hot one.
+			await store.readCold();
 			return;
 		}
 	} catch { return; }

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { ApiFailure } from "./security.js";
 import {
 	MAX_KV_VALUE_BYTES,
+	coldStateKey,
 	decodeBackup,
 	decodeState,
 	encodeBackup,
@@ -162,21 +163,26 @@ export function createCloudflareKvDocumentBackend(
 	site: string,
 ): DocumentBackend {
 	const key = stateKey(site);
+	const coldKey = coldStateKey(site);
+	async function readDocument(at: string) {
+		const raw = await readValue(config, at);
+		if (raw === null) return null;
+		return { json: decodeState(raw), etag: createHash("sha256").update(raw).digest("hex") };
+	}
+	async function writeDocument(at: string, json: string, expectedEtag: string | null): Promise<boolean> {
+		const current = await readValue(config, at);
+		const currentEtag = current === null
+			? ""
+			: createHash("sha256").update(current).digest("hex");
+		if (currentEtag !== (expectedEtag ?? "")) return false;
+		await writeValue(config, at, encodeState(json));
+		return true;
+	}
 	return {
-		async read() {
-			const raw = await readValue(config, key);
-			if (raw === null) return null;
-			return { json: decodeState(raw), etag: createHash("sha256").update(raw).digest("hex") };
-		},
-		async write(json, expectedEtag) {
-			const current = await readValue(config, key);
-			const currentEtag = current === null
-				? ""
-				: createHash("sha256").update(current).digest("hex");
-			if (currentEtag !== (expectedEtag ?? "")) return false;
-			await writeValue(config, key, encodeState(json));
-			return true;
-		},
+		read: () => readDocument(key),
+		write: (json, expectedEtag) => writeDocument(key, json, expectedEtag),
+		readCold: () => readDocument(coldKey),
+		writeCold: (json, expectedEtag) => writeDocument(coldKey, json, expectedEtag),
 	};
 }
 

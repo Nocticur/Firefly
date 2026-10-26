@@ -9,6 +9,15 @@ export function stateKey(site: string): string {
 	return `admin-state:${digest}:data`;
 }
 
+/**
+ * Version history and release snapshots are read only on dedicated screens, so they live in
+ * their own document. The hot document then stays small enough to parse on every request.
+ */
+export function coldStateKey(site: string): string {
+	const digest = createHash("sha256").update(site).digest("hex");
+	return `admin-state:${digest}:cold`;
+}
+
 export function encodeState(json: string): string {
 	return gzipSync(Buffer.from(json, "utf8"), { level: 9 }).toString("base64");
 }

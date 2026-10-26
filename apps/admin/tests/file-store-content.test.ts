@@ -96,16 +96,27 @@ test("a draft created before the repository was readable adopts the baseline ins
 	const local = await createPost(store, site, source.replace("旧标题", "本地草稿"), "original");
 	assert.equal(collection(await store.read(), "entities")["repository:baseline"], undefined);
 
+	// A history row saved under the local id must follow the article to its stable id.
+	await savePost(store, site, local.id, source.replace("旧标题", "本地草稿二稿"), 1);
+	const versionRow = Object.values(collection(await store.readCold(), "entities")).find(row => row.kind === "post_version");
+	assert.ok(versionRow);
+	assert.equal((versionRow.data as { postId: string }).postId, local.id);
+
 	const result = await importRepository(store, site, async () => repository);
 	assert.equal(result.imported, true);
 	assert.ok(collection(await store.read(), "entities")["repository:baseline"]);
 	// The repository owns this path, but the edited bytes are the user's and must survive
 	// the import; the article adopts published-state's stable id so its identity is stable.
 	const adopted = await getPost(store, site, repositoryId);
-	assert.equal(adopted.title, "本地草稿");
+	assert.equal(adopted.title, "本地草稿二稿");
 	assert.equal(adopted.filePath, "src/content/posts/original.md");
-	assert.equal(adopted.revision, 1);
+	assert.equal(adopted.revision, 2);
 	await assert.rejects(getPost(store, site, local.id), failure("POST_NOT_FOUND"));
+	// History rows follow the article to its new stable id instead of being orphaned.
+	const moved = Object.values(collection(await store.readCold(), "entities")).find(row => row.kind === "post_version");
+	assert.ok(moved);
+	assert.equal((moved.data as { postId: string }).postId, repositoryId);
+	assert.equal((await listPostHistory(store, site, repositoryId)).length, 1);
 	// Exactly one record per repository file: the draft was adopted, not duplicated.
 	const posts = Object.values(collection(await store.read(), "entities")).filter(row => row.kind === "post");
 	assert.equal(posts.length, 1);

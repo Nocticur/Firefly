@@ -446,13 +446,13 @@ function verifiedTask(row: Row): boolean {
 		!details?.restoreRequiresReconciliation
 	);
 }
-function publicFriends(state: StoreState): Row[] {
+function publicFriends(state: StoreState, cold: StoreState): Row[] {
 	const baseline = collection(state, "entities")["repository:baseline"]?.data as
 		| Row
 		| undefined;
 	const row = collection(state, "release_tasks")[String(baseline?.taskId)];
 	if (!row || !verifiedTask(row)) return [];
-	const snapshot = readVerifiedSnapshot(row, state);
+	const snapshot = readVerifiedSnapshot(row, cold);
 	if (
 		baseline?.snapshotId !== snapshot.id ||
 		baseline.publicContentDigest !== snapshot.digest ||
@@ -497,6 +497,13 @@ export async function markFriendsPublished(
 	const store = dependencies.store || getStore();
 	const site = dependencies.site || getSiteId();
 	const now = new Date().toISOString();
+	// The frozen snapshot lives in the cold document, so it is resolved and verified before
+	// the transaction; the task row below still fences it against a concurrent release.
+	const frozen = await (async () => {
+		const hot = await store.read();
+		const row = collection(hot, "release_tasks")[releaseId];
+		return row && verifiedTask(row) ? readVerifiedSnapshot(row, await store.readCold()) : null;
+	})();
 	await store.update((state) => {
 		writable(state, site);
 		const row = collection(state, "release_tasks")[releaseId];
@@ -506,7 +513,13 @@ export async function markFriendsPublished(
 				"VERIFIED_RELEASE_REQUIRED",
 				"友链上线状态必须关联已核验的真实发布",
 			);
-		const snapshot = readVerifiedSnapshot(row, state);
+		if (!frozen || frozen.id !== row.snapshot_id || frozen.taskId !== String(row.id))
+			throw new ApiFailure(
+				409,
+				"VERIFIED_RELEASE_REQUIRED",
+				"友链上线状态必须关联已核验的真实发布",
+			);
+		const snapshot = frozen;
 		const expected = revisions || {};
 		if (
 			!Array.isArray(snapshot.friendIds) ||
@@ -687,7 +700,7 @@ export function registerInteractionRoutes(
 	app.get("/api/public/friends", async (c) => {
 		const state = await store().read();
 		assertSite(state, siteId());
-		return c.json({ data: publicFriends(state) });
+		return c.json({ data: publicFriends(state, await store().readCold()) });
 	});
 	app.post("/api/public/friends", async (c) => {
 		const body = await readJson(c.req.raw, 16 * 1024);

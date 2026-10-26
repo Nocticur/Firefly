@@ -37,7 +37,7 @@ const backupNames = [
 	"release_snapshots",
 	"release_tasks",
 ] as const;
-type Backup = {
+export type Backup = {
 	schemaVersion: 2 | 3;
 	siteId: string;
 	id: string;
@@ -45,6 +45,10 @@ type Backup = {
 	authenticationPolicy: "invalidate-sessions";
 	collections: Record<string, Record<string, Row>>;
 	mediaManifest: Row[];
+};
+export type BackupPartition = {
+	hotCollections: Record<string, Record<string, Row>>;
+	coldCollections: Record<string, Record<string, Row>>;
 };
 const terminal = new Set(["verified", "failed", "conflict", "blocked"]);
 export const DATA_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -123,15 +127,34 @@ function activeRestore(state: StoreState): boolean {
 		Date.parse(String(lock.lease_until)) > Date.now()
 	);
 }
-function capture(state: StoreState, id: string, now: string): Backup {
+/**
+ * One logical view over the two documents. History lives in the cold document as
+ * `post_version` rows inside `entities`, release snapshots are a cold collection, and
+ * everything else stays hot. Backends without a second document return the same rows for
+ * both sides, so the merge is keyed by row id: nothing is captured twice and the cold copy
+ * wins wherever both documents disagree.
+ */
+export function mergeLogicalState(
+	hot: StoreState,
+	cold: StoreState,
+): Backup["collections"] {
 	const collections: Backup["collections"] = {};
 	for (const name of backupNames)
-		collections[name] = structuredClone(collection(state, name));
+		collections[name] = structuredClone(hot.collections[name] ?? {});
+	for (const [key, row] of Object.entries(cold.collections.entities ?? {}))
+		collections.entities[key] = structuredClone(row);
+	for (const [key, row] of Object.entries(cold.collections.release_snapshots ?? {}))
+		collections.release_snapshots[key] = structuredClone(row);
+	// Permissions are operational state and never belong to a restorable snapshot.
 	for (const [key, row] of Object.entries(collections.entities))
 		if (row.kind === "service_settings") delete collections.entities[key];
+	return collections;
+}
+function capture(hot: StoreState, cold: StoreState, id: string, now: string): Backup {
+	const collections = mergeLogicalState(hot, cold);
 	return {
 		schemaVersion: 3,
-		siteId: state.siteId,
+		siteId: hot.siteId,
 		id,
 		createdAt: now,
 		authenticationPolicy: "invalidate-sessions",
@@ -140,6 +163,39 @@ function capture(state: StoreState, id: string, now: string): Backup {
 			.filter((row) => row.kind === "media")
 			.map((row) => ({ ...(row.data as Row), id: row.id })),
 	};
+}
+/**
+ * Splits one logical backup into the writes for each document. History is a row kind inside
+ * `entities` rather than a collection of its own, so it is partitioned by row; release
+ * snapshots are a cold collection. Legacy backups that embedded history in `entities` are
+ * partitioned by the same rule, so no schema upgrade is required to restore them.
+ */
+export function partitionBackup(backup: Backup): BackupPartition {
+	const hotCollections: BackupPartition["hotCollections"] = {};
+	const coldCollections: BackupPartition["coldCollections"] = {
+		entities: {},
+		release_snapshots: {},
+	};
+	for (const name of backupNames) {
+		const rows = backup.collections[name] ?? {};
+		if (name === "entities") {
+			const hotEntities: Record<string, Row> = {};
+			for (const [key, row] of Object.entries(rows)) {
+				if (row.kind === "post_version")
+					coldCollections.entities[key] = structuredClone(row);
+				else hotEntities[key] = structuredClone(row);
+			}
+			hotCollections.entities = hotEntities;
+			continue;
+		}
+		if (name === "release_snapshots") {
+			for (const [key, row] of Object.entries(rows))
+				coldCollections.release_snapshots[key] = structuredClone(row);
+			continue;
+		}
+		hotCollections[name] = structuredClone(rows);
+	}
+	return { hotCollections, coldCollections };
 }
 /** One immutable JSON snapshot; ETag updates fence both backup and restore writers. */
 export async function createBackup(
@@ -155,6 +211,10 @@ export async function createBackup(
 	const backupProvider = options.backupProvider || configuredBackupProvider(),
 		owner = randomUUID(),
 		now = new Date().toISOString();
+	// History and release snapshots live in the second document. Read it before claiming the
+	// backup so the frozen payload covers one logical state; single-document backends return
+	// the same rows here and the keyed merge below never duplicates them.
+	const cold = await store.readCold();
 	const claim = await store.update((state) => {
 		assertSite(state, site);
 		if (
@@ -181,7 +241,7 @@ export async function createBackup(
 		const payload =
 			typeof previous?.payload === "string"
 				? previous.payload
-				: JSON.stringify(capture(state, id, now));
+				: JSON.stringify(capture(state, cold, id, now));
 		const checksum = hash(payload),
 			pathname = `admin-backup:${hash(site)}:${hash(id)}:${checksum}`;
 		claims[id] = {
@@ -477,6 +537,7 @@ export type CleanupSummary = {
 	backups: number;
 	maintenanceOutbox: number;
 	backupClaims: number;
+	storageOperations: number;
 };
 
 function isOlderThanRetention(value: unknown, cutoff: number): boolean {
@@ -500,6 +561,7 @@ export async function cleanupExpiredData(
 		backups: 0,
 		maintenanceOutbox: 0,
 		backupClaims: 0,
+		storageOperations: 0,
 	};
 	const before = await store.read();
 	assertSite(before, site);
@@ -520,15 +582,20 @@ export async function cleanupExpiredData(
 			// Keep the index if the immutable object could not be deleted.
 		}
 	}
-	return store.update((state) => {
+	return store.updateBoth((state, cold) => {
 		assertSite(state, site);
+		// A write conflict re-runs this callback; the summary must describe one cleanup run
+		// instead of accumulating the same rows once per attempt.
+		for (const name of Object.keys(summary) as (keyof CleanupSummary)[])
+			summary[name] = 0;
 		const entities = collection(state, "entities");
-		for (const [id, row] of Object.entries(entities)) {
+		const coldEntities = collection(cold, "entities");
+		for (const [id, row] of Object.entries(coldEntities)) {
 			if (
 				row.kind === "post_version" &&
 				isOlderThanRetention(row.created_at ?? (row.data as Row)?.createdAt, cutoff)
 			) {
-				delete entities[id];
+				delete coldEntities[id];
 				summary.postVersions++;
 			}
 		}
@@ -561,7 +628,7 @@ export async function cleanupExpiredData(
 				.filter((id): id is string => typeof id === "string" && id.length > 0),
 		);
 		if (baselineSnapshotId) referencedSnapshots.add(baselineSnapshotId);
-		const snapshots = collection(state, "release_snapshots");
+		const snapshots = collection(cold, "release_snapshots");
 		for (const [id, row] of Object.entries(snapshots)) {
 			if (
 				!referencedSnapshots.has(id) &&
@@ -577,6 +644,15 @@ export async function cleanupExpiredData(
 			if (deletedBackups.has(id) && isOlderThanRetention(row.created_at, cutoff)) {
 				delete backups[id];
 				summary.backups++;
+			}
+		}
+
+		// Cross-document journal entries are only useful while a recovery can still need them.
+		const operations = collection(state, "storage_operations");
+		for (const [id, row] of Object.entries(operations)) {
+			if (["completed", "failed"].includes(String(row.state)) && isOlderThanRetention(row.created_at, cutoff)) {
+				delete operations[id];
+				summary.storageOperations++;
 			}
 		}
 
@@ -625,6 +701,10 @@ export async function restoreBackup(
 			backupProvider,
 			dependencies.mediaFetcher ?? fetch,
 		);
+		// Fold history rows that a pre-split deployment left in the hot document into the cold
+		// one before reading the revision; otherwise the safety backup below would move them
+		// and this restore would abort on a revision mismatch that it caused itself.
+		await store.readCold();
 		const captured = await store.read();
 		owned(captured, site, lease);
 		safeToRestore(captured);
@@ -634,23 +714,27 @@ export async function restoreBackup(
 			site,
 			{ backupProvider, restoreOwner: true, expectedRevision: captured.revision },
 		);
-		await store.update((state) => {
-			owned(state, site, lease);
-			if (state.revision !== safety.storeRevision)
+		const partition = partitionBackup(backup);
+		// Both documents are rewritten in one call so a crash cannot leave history restored
+		// without its articles. The in-process backend hands the same object to both sides,
+		// so the merged view is applied once instead of letting the hot write erase the cold
+		// rows (and vice versa).
+		await store.updateBoth((hot, cold) => {
+			owned(hot, site, lease);
+			if (hot.revision !== safety.storeRevision)
 				throw new ApiFailure(
 					409,
 					"RESTORE_STATE_CHANGED",
 					"安全备份后数据已变化，请重新执行恢复",
 				);
-			safeToRestore(state);
-			const replacement = Object.fromEntries(
-				backupNames.map((name) => [name, structuredClone(backup.collections[name])]),
-			);
+			safeToRestore(hot);
+			const hotCollections = structuredClone(partition.hotCollections);
+			const coldCollections = structuredClone(partition.coldCollections);
 			// Permissions are operational state and can never be restored from an
 			// older snapshot, including a snapshot created by another version.
-			for (const [key, row] of Object.entries(replacement.entities))
-				if (row.kind === "service_settings") delete replacement.entities[key];
-			for (const row of Object.values(replacement.release_tasks)) {
+			for (const [key, row] of Object.entries(hotCollections.entities))
+				if (row.kind === "service_settings") delete hotCollections.entities[key];
+			for (const row of Object.values(hotCollections.release_tasks)) {
 				row.details = {
 					...(row.details as Row),
 					restored: true,
@@ -669,20 +753,35 @@ export async function restoreBackup(
 					});
 			}
 			for (const [id, current] of Object.entries(
-				collection(state, "release_tasks"),
+				collection(hot, "release_tasks"),
 			))
 				if (current.kind !== "publish")
-					replacement.release_tasks[id] = structuredClone(current);
+					hotCollections.release_tasks[id] = structuredClone(current);
 			for (const [key, current] of Object.entries(
-				collection(state, "entities"),
+				collection(hot, "entities"),
 			))
 				if (current.kind === "service_settings")
-					replacement.entities[key] = structuredClone(current);
-			for (const name of backupNames)
-				state.collections[name] = replacement[name];
-			state.collections.sessions = {};
-			state.collections.oauth_states = {};
-			for (const lock of Object.values(collection(state, "release_locks")))
+					hotCollections.entities[key] = structuredClone(current);
+			if (hot === cold) {
+				for (const name of new Set([
+					...Object.keys(hotCollections),
+					...Object.keys(coldCollections),
+				]))
+					hot.collections[name] = {
+						...(hotCollections[name] ?? {}),
+						...(coldCollections[name] ?? {}),
+					};
+			} else {
+				for (const [name, rows] of Object.entries(hotCollections))
+					hot.collections[name] = rows;
+				for (const [name, rows] of Object.entries(coldCollections))
+					cold.collections[name] = rows;
+				// History and release snapshots are owned by the cold document.
+				delete hot.collections.release_snapshots;
+			}
+			hot.collections.sessions = {};
+			hot.collections.oauth_states = {};
+			for (const lock of Object.values(collection(hot, "release_locks")))
 				Object.assign(lock, {
 					task_id: null,
 					lease_until: new Date().toISOString(),

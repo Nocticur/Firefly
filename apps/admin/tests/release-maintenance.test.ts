@@ -3,20 +3,62 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import {
 	collection,
+	createFileStore,
 	createMemoryStore,
+	type DocumentBackend,
 	type FileStore,
 	type Row,
 } from "../server/file-store.js";
+import { listPostHistory } from "../server/content.js";
 import { ApiFailure } from "../server/security.js";
 import {
 	claimMaintenanceTask,
 	cleanupExpiredData,
 	createBackup,
+	partitionBackup,
 	processMaintenanceTask,
 	restoreBackup,
+	type Backup,
 	type BackupProvider,
 } from "../server/maintenance.js";
 const site = "Nocticur/Firefly:production";
+/** Mirrors the Cloudflare KV layout: articles and settings hot, history and snapshots cold. */
+function twoDocumentBackend(): {
+	backend: DocumentBackend;
+	values: { hot: string | null; cold: string | null };
+} {
+	const values: { hot: string | null; cold: string | null } = {
+		hot: null,
+		cold: null,
+	};
+	const etag = (value: string | null) =>
+		value === null ? null : createHash("sha256").update(value).digest("hex");
+	return {
+		values,
+		backend: {
+			async read() {
+				return values.hot === null
+					? null
+					: { json: values.hot, etag: etag(values.hot)! };
+			},
+			async write(json, expected) {
+				if (etag(values.hot) !== expected) return false;
+				values.hot = json;
+				return true;
+			},
+			async readCold() {
+				return values.cold === null
+					? null
+					: { json: values.cold, etag: etag(values.cold)! };
+			},
+			async writeCold(json, expected) {
+				if (etag(values.cold) !== expected) return false;
+				values.cold = json;
+				return true;
+			},
+		},
+	};
+}
 class MemoryBackupStore implements BackupProvider {
 	objects = new Map<string, Buffer>();
 	puts: string[] = [];
@@ -58,15 +100,63 @@ async function task(store: FileStore, kind: string, details: Row = {}) {
 }
 async function post(store: FileStore, source: string) {
 	const id = randomUUID();
+	const now = new Date().toISOString();
 	await store.update((state) => {
 		collection(state, "entities")[`post:${id}`] = {
 			id,
 			kind: "post",
 			data: { source, draft: true },
 			revision: 1,
+			created_at: now,
+			updated_at: now,
 		};
 	});
 	return id;
+}
+/**
+ * Writes one history row and one release snapshot the way content.ts and releases.ts do:
+ * history is a `post_version` row inside `entities`, snapshots are their own collection.
+ */
+async function coldContent(store: FileStore, postId: string, source: string) {
+	const createdAt = new Date().toISOString();
+	const versionId = randomUUID();
+	await store.updateCold((state) => {
+		collection(state, "entities")[`post_version:${versionId}`] = {
+			id: versionId,
+			kind: "post_version",
+			data: { id: versionId, postId, source, revision: 1, createdAt, reason: "save" },
+			revision: 1,
+			created_at: createdAt,
+			updated_at: createdAt,
+		};
+		collection(state, "release_snapshots").snapshot = {
+			id: "snapshot",
+			digest: "digest",
+			data: { sources: [{ id: postId, source }] },
+			created_at: createdAt,
+		};
+	});
+	return versionId;
+}
+function backupPayload(provider: MemoryBackupStore, record: Row): Backup {
+	return JSON.parse(provider.objects.get(String(record.pathname))!.toString());
+}
+async function replaceBackupPayload(
+	store: FileStore,
+	provider: MemoryBackupStore,
+	record: Row,
+	backup: Backup,
+): Promise<Buffer> {
+	const bytes = Buffer.from(JSON.stringify(backup));
+	provider.objects.set(String(record.pathname), bytes);
+	await store.update((state) => {
+		collection(state, "maintenance_backups")[String(record.id)].sha256 = createHash(
+			"sha256",
+		)
+			.update(bytes)
+			.digest("hex");
+	});
+	return bytes;
 }
 const failure = (code: string) => (error: unknown) =>
 	error instanceof ApiFailure && error.code === code;
@@ -432,6 +522,9 @@ test("cleanup removes data older than 30 days but keeps active and baseline rele
 		snapshots["recent-snapshot"] = { id: "recent-snapshot", created_at: recent, data: {} };
 		backups.old = { id: "old", state: "verified", pathname: "backups/old.json", created_at: old };
 		backups.recent = { id: "recent", state: "verified", pathname: "backups/recent.json", created_at: recent };
+		const operations = collection(state, "storage_operations");
+		operations["op-old"] = { id: "op-old", kind: "cross-document", state: "completed", payload: [], created_at: old, updated_at: old };
+		operations["op-recent"] = { id: "op-recent", kind: "cross-document", state: "completed", payload: [], created_at: recent, updated_at: recent };
 	});
 	backupProvider.objects.set("backups/old.json", Buffer.from("old"));
 	backupProvider.objects.set("backups/recent.json", Buffer.from("recent"));
@@ -442,6 +535,10 @@ test("cleanup removes data older than 30 days but keeps active and baseline rele
 	assert.equal(result.releaseTasks, 1);
 	assert.equal(result.releaseSnapshots, 1);
 	assert.equal(result.backups, 1);
+	// Finished cross-document journal entries expire with the rest of the aged history.
+	assert.equal(result.storageOperations, 1);
+	assert.equal(collection(state, "storage_operations")["op-old"], undefined);
+	assert.ok(collection(state, "storage_operations")["op-recent"]);
 	assert.equal(collection(state, "entities")["post-version-old"], undefined);
 	assert.equal(collection(state, "entities")["post-version-boundary"], undefined);
 	assert.ok(collection(state, "entities")["post-version-recent"]);
@@ -455,5 +552,265 @@ test("cleanup removes data older than 30 days but keeps active and baseline rele
 	assert.equal(collection(state, "maintenance_backups").old, undefined);
 	assert.ok(collection(state, "maintenance_backups").recent);
 	assert.deepEqual(backupProvider.deletes, ["backups/old.json"]);
+	// The same cleanup runs on every cron tick, so a second run must delete nothing and
+	// report zero instead of recounting rows that are already gone.
+	const repeated = await cleanupExpiredData(store, site, backupProvider, now);
+	assert.deepEqual(repeated, {
+		postVersions: 0,
+		releaseTasks: 0,
+		releaseSnapshots: 0,
+		backups: 0,
+		maintenanceOutbox: 0,
+		backupClaims: 0,
+		storageOperations: 0,
+	});
+	assert.ok(collection(await store.read(), "release_snapshots")["baseline-snapshot"]);
+});
+
+test("private backups freeze cold history rows and release snapshots", async () => {
+	const { backend } = twoDocumentBackend();
+	const store = createFileStore(backend, site);
+	const postId = await post(store, "cold draft");
+	const versionId = await coldContent(store, postId, "previous source");
+	const backupProvider = new MemoryBackupStore();
+	const record = await createBackup("cold", store, site, { backupProvider });
+	const backup = backupPayload(backupProvider, record);
+	assert.equal(backup.schemaVersion, 3);
+	assert.equal(
+		(backup.collections.entities[`post_version:${versionId}`].data as Row).source,
+		"previous source",
+	);
+	assert.ok(backup.collections.release_snapshots.snapshot);
+	// Operational state never enters a backup.
+	assert.equal(backup.collections.storage_operations, undefined);
+	assert.equal(backup.collections.sessions, undefined);
+	assert.equal(backup.collections.oauth_states, undefined);
+	const counts = (record.data as Row).collectionCounts as Record<string, number>;
+	assert.equal(counts.entities, 2);
+	assert.equal(counts.release_snapshots, 1);
+});
+
+test("in-process stores merge history once because both views are the same document", async () => {
+	const store = createMemoryStore(site);
+	const postId = await post(store, "memory draft");
+	await coldContent(store, postId, "memory history");
+	const backupProvider = new MemoryBackupStore();
+	const record = await createBackup("memory", store, site, { backupProvider });
+	const backup = backupPayload(backupProvider, record);
+	const versions = Object.values(backup.collections.entities).filter(
+		(row) => row.kind === "post_version",
+	);
+	assert.equal(versions.length, 1);
+	assert.equal(
+		(JSON.stringify(backup).match(/"kind":"post_version"/g) || []).length,
+		1,
+	);
+	assert.ok(backup.collections.release_snapshots.snapshot);
+});
+
+test("partitionBackup routes embedded history and snapshots to the cold side", () => {
+	const backup = {
+		schemaVersion: 2,
+		siteId: site,
+		id: "legacy",
+		createdAt: new Date().toISOString(),
+		authenticationPolicy: "invalidate-sessions",
+		mediaManifest: [],
+		collections: {
+			entities: {
+				"post:kept": { id: "kept", kind: "post", data: {}, revision: 1 },
+				"post_version:old": {
+					id: "old",
+					kind: "post_version",
+					data: {},
+					revision: 1,
+				},
+			},
+			comments: {},
+			visitor_bans: {},
+			friends: {},
+			media_upload_intents: {},
+			release_snapshots: { snapshot: { id: "snapshot", data: {} } },
+			release_tasks: {
+				task: { id: "task", kind: "publish", state: "verified" },
+			},
+		},
+	} as Backup;
+	const partition = partitionBackup(backup);
+	assert.ok(partition.hotCollections.entities["post:kept"]);
+	assert.equal(partition.hotCollections.entities["post_version:old"], undefined);
+	assert.ok(partition.coldCollections.entities["post_version:old"]);
+	assert.ok(partition.coldCollections.release_snapshots.snapshot);
+	assert.equal(partition.hotCollections.release_snapshots, undefined);
+	assert.ok(partition.hotCollections.release_tasks.task);
+	assert.ok(partition.hotCollections.comments);
+});
+
+test("restoring a legacy backup with history embedded in entities keeps history and snapshots readable", async () => {
+	const store = createMemoryStore(site),
+		backupProvider = new MemoryBackupStore(),
+		postId = await post(store, "first source");
+	const versionId = await coldContent(store, postId, "first history");
+	const record = await createBackup("legacy", store, site, { backupProvider });
+	// The older format is the same flat layout with `post_version` rows inline in
+	// `entities` and the retired mail collection; restoring must not reject or drop it.
+	const legacy = backupPayload(backupProvider, record);
+	legacy.schemaVersion = 2;
+	legacy.collections.mail_outbox = { obsolete: { oldProviderFormat: true } };
+	await replaceBackupPayload(store, backupProvider, record, legacy);
+	await store.update((state) => {
+		const entities = collection(state, "entities");
+		(entities[`post:${postId}`].data as Row).source = "second source";
+		for (const key of Object.keys(entities))
+			if (entities[key].kind === "post_version") delete entities[key];
+		delete collection(state, "release_snapshots").snapshot;
+	});
+	const restore = await task(store, "restore", { backupId: "legacy" });
+	await restoreBackup("legacy", restore, {
+		store,
+		site,
+		backupProvider,
+		skipCapabilityCheck: true,
+	});
+	const state = await store.read();
+	assert.equal(
+		(collection(state, "entities")[`post:${postId}`].data as Row).source,
+		"first source",
+	);
+	const history = await listPostHistory(store, site, postId);
+	assert.equal(history.length, 1);
+	assert.equal(history[0].id, versionId);
+	assert.equal(history[0].source, "first history");
+	assert.ok(collection(await store.readCold(), "release_snapshots").snapshot);
+});
+
+test("restore writes history and snapshots back to the cold document, not the hot one", async () => {
+	const { backend, values } = twoDocumentBackend();
+	const store = createFileStore(backend, site);
+	const postId = await post(store, "cold restore draft");
+	const versionId = await coldContent(store, postId, "cold history");
+	const backupProvider = new MemoryBackupStore();
+	await createBackup("split", store, site, { backupProvider });
+	await store.update((state) => {
+		(collection(state, "entities")[`post:${postId}`].data as Row).source =
+			"changed after backup";
+		collection(state, "sessions").token = { token_hash: "secret" };
+	});
+	const restore = await task(store, "restore", { backupId: "split" });
+	await restoreBackup("split", restore, {
+		store,
+		site,
+		backupProvider,
+		skipCapabilityCheck: true,
+	});
+	// Read the two raw documents: cold material must never be written into the hot one.
+	assert.doesNotMatch(values.hot!, /post_version/);
+	assert.doesNotMatch(values.hot!, /"release_snapshots":\{"snapshot"/);
+	assert.match(values.cold!, /post_version/);
+	assert.match(values.cold!, /"release_snapshots":\{"snapshot"/);
+	const hot = await store.read();
+	assert.equal(
+		(collection(hot, "entities")[`post:${postId}`].data as Row).source,
+		"cold restore draft",
+	);
+	assert.deepEqual(Object.keys(collection(hot, "sessions")), []);
+	const history = await listPostHistory(store, site, postId);
+	assert.deepEqual(
+		history.map((version) => version.id),
+		[versionId],
+	);
+	assert.ok(collection(await store.readCold(), "release_snapshots").snapshot);
+});
+
+test("restoring the same backup twice does not duplicate tasks or articles", async () => {
+	const store = createMemoryStore(site),
+		backupProvider = new MemoryBackupStore(),
+		postId = await post(store, "draft"),
+		keptTask = await task(store, "backup"),
+		publishId = await task(store, "publish");
+	await store.update((state) => {
+		collection(state, "release_tasks")[publishId].state = "verified";
+	});
+	await createBackup("repeat", store, site, { backupProvider });
+	await store.update((state) => {
+		delete collection(state, "release_tasks")[publishId];
+		delete collection(state, "entities")[`post:${postId}`];
+	});
+	const first = await task(store, "restore", { backupId: "repeat" });
+	await restoreBackup("repeat", first, {
+		store,
+		site,
+		backupProvider,
+		skipCapabilityCheck: true,
+	});
+	const afterFirst = Object.keys(
+		collection(await store.read(), "release_tasks"),
+	);
+	assert.deepEqual(afterFirst.sort(), [keptTask, publishId, first].sort());
+	const second = await task(store, "restore", { backupId: "repeat" });
+	await restoreBackup("repeat", second, {
+		store,
+		site,
+		backupProvider,
+		skipCapabilityCheck: true,
+	});
+	const state = await store.read();
+	const afterSecond = Object.keys(collection(state, "release_tasks"));
+	assert.deepEqual(
+		afterSecond.sort(),
+		[keptTask, publishId, first, second].sort(),
+	);
+	assert.equal(
+		Object.values(collection(state, "entities")).filter(
+			(row) => row.kind === "post",
+		).length,
+		1,
+	);
+});
+
+test("after a restore the article, history and task read paths agree with the backup", async () => {
+	const store = createMemoryStore(site),
+		backupProvider = new MemoryBackupStore(),
+		postId = await post(store, "restorable source"),
+		publishId = await task(store, "publish");
+	const versionId = await coldContent(store, postId, "restorable history");
+	await store.update((state) => {
+		collection(state, "release_tasks")[publishId].state = "verified";
+	});
+	await createBackup("reads", store, site, { backupProvider });
+	await store.update((state) => {
+		(collection(state, "entities")[`post:${postId}`].data as Row).source =
+			"diverged";
+		delete collection(state, "release_tasks")[publishId];
+		const entities = collection(state, "entities");
+		for (const key of Object.keys(entities))
+			if (entities[key].kind === "post_version") delete entities[key];
+		delete collection(state, "release_snapshots").snapshot;
+	});
+	const restore = await task(store, "restore", { backupId: "reads" });
+	await restoreBackup("reads", restore, {
+		store,
+		site,
+		backupProvider,
+		skipCapabilityCheck: true,
+	});
+	const state = await store.read();
+	// Article list (GET /api/posts) sees exactly the backed-up article.
+	const posts = Object.values(collection(state, "entities")).filter(
+		(row) => row.kind === "post",
+	);
+	assert.equal(posts.length, 1);
+	assert.equal((posts[0].data as Row).source, "restorable source");
+	// History list (GET /api/posts/:id/history) still reads the cold view.
+	const history = await listPostHistory(store, site, postId);
+	assert.equal(history.length, 1);
+	assert.equal(history[0].id, versionId);
+	// Task list (GET /api/release/tasks) keeps the terminal publish and the live restore task.
+	const tasks = Object.values(collection(state, "release_tasks"));
+	const restored = tasks.find((row) => row.id === publishId)!;
+	assert.equal(restored.state, "verified");
+	assert.equal((restored.details as Row).restored, true);
+	assert.ok(tasks.some((row) => row.id === restore));
+	assert.ok(collection(state, "release_snapshots").snapshot);
 });
 

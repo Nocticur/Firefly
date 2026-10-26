@@ -35,14 +35,26 @@ function postInState(state: StoreState, siteId: string, id: string): PostRecord 
 export async function getPost(store: FileStore, siteId: string, id: string): Promise<PostRecord> {
 	return postInState(await store.read(), siteId, id);
 }
-function appendHistory(state: StoreState, post: PostRecord, reason: string): void {
+/** History payloads live in the cold document; losing one must never fail a saved post. */
+async function appendHistory(store: FileStore, siteId: string, post: PostRecord, reason: string): Promise<void> {
 	const id = randomUUID();
 	const version: PostVersion = { id, postId: post.id, source: post.source, revision: post.revision, createdAt: new Date().toISOString(), reason };
-	collection(state, "entities")[`post_version:${id}`] = { id, kind: "post_version", data: version, revision: 1, created_at: version.createdAt, updated_at: version.createdAt };
+	try {
+		await store.updateCold((state) => {
+			assertSite(state, siteId);
+			collection(state, "entities")[`post_version:${id}`] = { id, kind: "post_version", data: version, revision: 1, created_at: version.createdAt, updated_at: version.createdAt };
+		});
+	} catch (error) {
+		// The article is saved; the missing version stays visible instead of vanishing silently.
+		const failure = error instanceof Error ? error.name : "unknown";
+		console.error(JSON.stringify({ code: "POST_HISTORY_NOT_SAVED", postId: post.id, versionId: id, revision: post.revision, failure }));
+		await store.noteOperation("post-history", { postId: post.id, versionId: id, revision: post.revision, reason }, failure).catch(() => {});
+	}
 }
 export async function savePost(store: FileStore, siteId: string, id: string, source: string, expected: number, reason = "save"): Promise<PostRecord> {
 	const metadata = validatePostSource(source);
-	return store.update((state) => {
+	const carried: { previous: PostRecord | null } = { previous: null };
+	const updated = await store.update((state) => {
 		const current = postInState(state, siteId, id);
 		if (current.revision !== expected) throw new ApiFailure(409, "REVISION_CONFLICT", "草稿已被另一次保存修改，请比较后重新保存", { currentRevision: current.revision, currentSource: current.source });
 		if (source === current.source) return current;
@@ -52,11 +64,13 @@ export async function savePost(store: FileStore, siteId: string, id: string, sou
 		const autoSlug = current.publishedRevision === null && current.slug === slugFromTitle(current.title);
 		const nextSlug = metadata.slug !== undefined ? normalizeSlug(metadata.slug) : autoSlug ? uniqueSlug(entities, slugFromTitle(String(metadata.title)), id) : current.slug;
 		if (Object.values(entities).some(row => row.kind === "post" && row.id !== id && (row.data as PostRecord).slug === nextSlug)) throw new ApiFailure(409, "SLUG_EXISTS", "该网址已被另一篇文章使用");
-		appendHistory(state, current, reason);
+		carried.previous = current;
 		const updated: PostRecord = { ...current, slug: nextSlug, title: String(metadata.title), published: String(metadata.published), draft: metadata.draft === true, source, metadata, revision: current.revision + 1, updatedAt: new Date().toISOString() };
 		entities[`post:${id}`] = { ...entities[`post:${id}`], data: updated, revision: updated.revision, updated_at: updated.updatedAt };
 		return updated;
 	});
+	if (carried.previous) await appendHistory(store, siteId, carried.previous, reason);
+	return updated;
 }
 export async function createPost(store: FileStore, siteId: string, source: string, slugValue?: unknown, format: "md" | "mdx" = "md"): Promise<PostRecord> {
 	const metadata = validatePostSource(source);
@@ -75,12 +89,12 @@ export async function createPost(store: FileStore, siteId: string, source: strin
 }
 
 export async function listPostHistory(store: FileStore, siteId: string, id: string): Promise<PostVersion[]> {
-	const state = await store.read();
-	postInState(state, siteId, id);
+	postInState(await store.read(), siteId, id);
+	const state = await store.readCold();
 	return Object.values(collection(state, "entities")).filter(row => row.kind === "post_version" && (row.data as PostVersion).postId === id).map(row => row.data as PostVersion).sort((a, b) => b.revision - a.revision || b.createdAt.localeCompare(a.createdAt));
 }
 export async function restorePostVersion(store: FileStore, siteId: string, id: string, versionId: string, expected: number): Promise<PostRecord> {
-	const state = await store.read();
+	const state = await store.readCold();
 	assertSite(state, siteId);
 	const version = collection(state, "entities")[`post_version:${versionId}`]?.data as PostVersion | undefined;
 	if (!version || version.postId !== id) throw new ApiFailure(404, "VERSION_NOT_FOUND", "历史版本不存在");
@@ -93,14 +107,13 @@ export async function restorePostVersion(store: FileStore, siteId: string, id: s
  * path until a release commits the removal, after which it is discarded.
  */
 export async function deletePost(store: FileStore, siteId: string, id: string): Promise<{ id: string; title: string; published: boolean; pendingGitDeletion: boolean }> {
-	return store.update((state) => {
+	const removed = await store.update((state) => {
 		assertSite(state, siteId);
 		const entities = collection(state, "entities");
 		const row = entities[`post:${id}`] as PostRow | undefined;
 		if (!row) throw new ApiFailure(404, "POST_NOT_FOUND", "文章不存在");
 		const post = postFromRow(row);
 		delete entities[`post:${id}`];
-		for (const [key, item] of Object.entries(entities)) if (item.kind === "post_version" && (item.data as PostVersion).postId === id) delete entities[key];
 		const published = post.publishedRevision !== null;
 		if (published) {
 			const now = new Date().toISOString();
@@ -108,6 +121,15 @@ export async function deletePost(store: FileStore, siteId: string, id: string): 
 		}
 		return { id, title: post.title, published, pendingGitDeletion: published };
 	});
+	// The article is already gone; history cleanup must not turn that into a failed delete.
+	try {
+		await store.updateCold((state) => {
+			assertSite(state, siteId);
+			const entities = collection(state, "entities");
+			for (const [key, item] of Object.entries(entities)) if (item.kind === "post_version" && (item.data as PostVersion).postId === id) delete entities[key];
+		});
+	} catch { /* orphans are harmless and get collected by maintenance */ }
+	return removed;
 }
 
 export function registerContentRoutes(app: AdminApp) {
