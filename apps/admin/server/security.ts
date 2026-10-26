@@ -91,7 +91,7 @@ export async function readText(request: Request, limit: number, timeoutMs = 10_0
 		reader.releaseLock();
 	}
 }
-export async function readJson(request: Request, limit = 2 * 1024 * 1024): Promise<Record<string, unknown>> {
+export async function readJson(request: Request, limit: number = 2 * 1024 * 1024): Promise<Record<string, unknown>> {
 	if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get("content-type") || "")) throw new ApiFailure(415, "JSON_REQUIRED", "请求必须使用 application/json");
 	const text = await readText(request, limit);
 	let value: unknown;

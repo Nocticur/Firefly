@@ -17,7 +17,7 @@ export async function GET(): Promise<Response> {
 			const images: Array<{ alt: string; src: string; title?: string }> = [];
 			const markdown = (entry.body || "").replace(
 				markdownImagePattern,
-				(_match, alt: string, src: string, title?: string) => {
+				(_match: string, alt: string, src: string, title?: string) => {
 					images.push({ alt, src, ...(title ? { title } : {}) });
 					return "";
 				},

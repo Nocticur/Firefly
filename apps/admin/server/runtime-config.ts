@@ -2,7 +2,7 @@ import managed from "../../../src/data/managed-settings.json";
 import { commentConfig } from "../../../src/config/commentConfig.js";
 
 // Defaults come from published configuration, never unreviewed private drafts.
-export const siteOrigin = new URL(managed.settings.siteUrl).origin;
+export const siteOrigin: string = new URL(managed.settings.siteUrl).origin;
 export function hostedProduction(
 	env: NodeJS.ProcessEnv = process.env,
 ): boolean {

@@ -1,4 +1,3 @@
-import type { CollectionEntry } from "astro:content";
 import { getCollection } from "astro:content";
 import * as fs from "node:fs";
 import type { APIContext, GetStaticPaths } from "astro";
@@ -7,6 +6,15 @@ import { ImageResponse } from "takumi-js/response";
 import { profileConfig } from "@/config/profileConfig";
 import { siteConfig } from "@/config/siteConfig";
 import { removeFileExtension } from "@/utils/url-utils";
+import type { PostData } from "../../content.config";
+
+// 仓库缺少 `.astro/types.d.ts` / `.astro/content.d.ts` 时，`astro:content` 的
+// `CollectionEntry` 会退化成 `any`；这里用 `content.config.ts` 由 zod schema
+// 推导出的 data 类型重建本地条目形状，不依赖 `astro:content` 的生成类型。
+type PostEntry = {
+	id: string;
+	data: PostData;
+};
 
 export const prerender = true;
 
@@ -15,10 +23,10 @@ export const getStaticPaths: GetStaticPaths = async () => {
 		return [];
 	}
 
-	const allPosts = await getCollection("posts");
-	const publishedPosts = allPosts.filter((post) => !post.data.draft);
+	const allPosts = (await getCollection("posts")) as unknown as PostEntry[];
+	const publishedPosts = allPosts.filter((post: PostEntry) => !post.data.draft);
 
-	return publishedPosts.map((post) => {
+	return publishedPosts.map((post: PostEntry) => {
 		// 将 id 转换为 slug（移除扩展名）以匹配路由参数
 		const slug = removeFileExtension(post.id);
 		return {
@@ -215,7 +223,7 @@ const loadImageAsArrayBuffer = async (
 
 export async function GET({
 	props,
-}: APIContext<{ post: CollectionEntry<"posts"> }>): Promise<Response> {
+}: APIContext<{ post: PostEntry }>): Promise<Response> {
 	const { post } = props;
 
 	// Load and get static assets

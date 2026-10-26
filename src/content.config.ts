@@ -5,7 +5,7 @@ import { type ZodType, z } from "astro/zod";
 import { slug as githubSlug } from "github-slugger";
 import publishedState from "./data/published-state.json";
 
-type PostData = {
+export type PostData = {
 	title: string;
 	published: Date;
 	updated?: Date;
@@ -41,7 +41,7 @@ type ProjectLink = {
 	value: string;
 };
 
-type ProjectData = {
+export type ProjectData = {
 	title: string;
 	published: Date;
 	draft: boolean;

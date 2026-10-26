@@ -1,15 +1,47 @@
-import { type CollectionEntry, getCollection } from "astro:content";
+import { getCollection } from "astro:content";
 import I18nKey from "@i18n/i18nKey";
 import { i18n } from "@i18n/translation";
 import { getCategoryUrl } from "@utils/url-utils";
+import type { PostData, ProjectData } from "../content.config";
+
+// 仓库缺少 `.astro/types.d.ts` / `.astro/content.d.ts` 时，`astro:content` 的
+// `CollectionEntry` 会退化成 `any`，`getCollection` 的返回值也随之变成 `any`。
+// 这里改用 `content.config.ts` 中由 zod schema 推导出的 data 类型重建本地条目形状，
+// 这样回调参数不再退化成隐式 any，也不必从 `astro:content` 导入类型。
+// `body` / `filePath` 由 SiteStats、文章路由等 .astro 组件读取，故按实际用法保留为可选字段。
+export type PostEntry = {
+	id: string;
+	data: PostData;
+	body?: string;
+	filePath?: string;
+};
+
+type ProjectEntry = {
+	id: string;
+	data: ProjectData;
+	filePath?: string;
+};
+
+/**
+ * `getCollection` 在当前类型环境下返回 `any`；集中在这一处窄化成 `PostEntry[]`，
+ * 避免 `any` 扩散到每个调用点。
+ */
+function asPostEntries(entries: unknown): PostEntry[] {
+	return entries as PostEntry[];
+}
+
+/** 生产环境过滤草稿、开发环境保留全部；与原先写在 getCollection 里的回调逻辑一致。 */
+function keepPublishedPost({ data }: PostEntry): boolean {
+	return import.meta.env.PROD ? data.draft !== true : true;
+}
 
 // // Retrieve posts and sort them by publication date
-async function getRawSortedPosts() {
-	const allBlogPosts = await getCollection("posts", ({ data }) => {
-		return import.meta.env.PROD ? data.draft !== true : true;
-	});
+async function getRawSortedPosts(): Promise<PostEntry[]> {
+	const allBlogPosts = asPostEntries(
+		await getCollection("posts", keepPublishedPost),
+	);
 
-	const sorted = allBlogPosts.sort((a, b) => {
+	const sorted = allBlogPosts.sort((a: PostEntry, b: PostEntry) => {
 		// 首先按置顶状态排序，置顶文章在前
 		if (a.data.pinned && !b.data.pinned) return -1;
 		if (!a.data.pinned && b.data.pinned) return 1;
@@ -22,7 +54,7 @@ async function getRawSortedPosts() {
 	return sorted;
 }
 
-export async function getSortedPosts(): Promise<CollectionEntry<"posts">[]> {
+export async function getSortedPosts(): Promise<PostEntry[]> {
 	const sorted = await getRawSortedPosts();
 
 	for (let i = 1; i < sorted.length; i++) {
@@ -38,13 +70,13 @@ export async function getSortedPosts(): Promise<CollectionEntry<"posts">[]> {
 }
 export type PostForList = {
 	id: string;
-	data: CollectionEntry<"posts">["data"];
+	data: PostData;
 };
 export async function getSortedPostsList(): Promise<PostForList[]> {
 	const sortedFullPosts = await getRawSortedPosts();
 
 	// delete post.body
-	const sortedPostsList = sortedFullPosts.map((post) => ({
+	const sortedPostsList = sortedFullPosts.map((post: PostEntry) => ({
 		id: post.id,
 		data: post.data,
 	}));
@@ -57,14 +89,14 @@ export async function getSortedPostsList(): Promise<PostForList[]> {
  * 排序规则：手动 order 降序（越大越靠前，未设置排最后）→ 发布时间降序 → 标题兜底
  * 注意：判断 order 是否设置必须用 !== undefined，否则 0 会被当作「未设置」排到最后
  */
-export async function getSortedProjects(): Promise<
-	CollectionEntry<"projects">[]
-> {
-	const allProjects = await getCollection("projects", ({ data }) => {
-		return import.meta.env.PROD ? data.draft !== true : true;
-	});
+export async function getSortedProjects(): Promise<ProjectEntry[]> {
+	const allProjects = (await getCollection(
+		"projects",
+		({ data }: ProjectEntry) =>
+			import.meta.env.PROD ? data.draft !== true : true,
+	)) as unknown as ProjectEntry[];
 
-	return allProjects.sort((a, b) => {
+	return allProjects.sort((a: ProjectEntry, b: ProjectEntry) => {
 		const ao = a.data.order;
 		const bo = b.data.order;
 		if (ao !== undefined && bo !== undefined) {
@@ -88,12 +120,12 @@ export type Tag = {
 };
 
 export async function getTagList(): Promise<Tag[]> {
-	const allBlogPosts = await getCollection<"posts">("posts", ({ data }) => {
-		return import.meta.env.PROD ? data.draft !== true : true;
-	});
+	const allBlogPosts = asPostEntries(
+		await getCollection("posts", keepPublishedPost),
+	);
 
 	const countMap: { [key: string]: number } = {};
-	allBlogPosts.forEach((post: { data: { tags: string[] } }) => {
+	allBlogPosts.forEach((post: PostEntry) => {
 		post.data.tags.forEach((tag: string) => {
 			if (!countMap[tag]) countMap[tag] = 0;
 			countMap[tag]++;
@@ -101,7 +133,7 @@ export async function getTagList(): Promise<Tag[]> {
 	});
 
 	// sort tags
-	const keys: string[] = Object.keys(countMap).sort((a, b) => {
+	const keys: string[] = Object.keys(countMap).sort((a: string, b: string) => {
 		return a.toLowerCase().localeCompare(b.toLowerCase());
 	});
 
@@ -115,11 +147,11 @@ export type Category = {
 };
 
 export async function getCategoryList(): Promise<Category[]> {
-	const allBlogPosts = await getCollection<"posts">("posts", ({ data }) => {
-		return import.meta.env.PROD ? data.draft !== true : true;
-	});
+	const allBlogPosts = asPostEntries(
+		await getCollection("posts", keepPublishedPost),
+	);
 	const count: { [key: string]: number } = {};
-	allBlogPosts.forEach((post: { data: { category: string | null } }) => {
+	allBlogPosts.forEach((post: PostEntry) => {
 		if (!post.data.category) {
 			const ucKey = i18n(I18nKey.uncategorized);
 			count[ucKey] = count[ucKey] ? count[ucKey] + 1 : 1;
@@ -134,7 +166,7 @@ export async function getCategoryList(): Promise<Category[]> {
 		count[categoryName] = count[categoryName] ? count[categoryName] + 1 : 1;
 	});
 
-	const lst = Object.keys(count).sort((a, b) => {
+	const lst = Object.keys(count).sort((a: string, b: string) => {
 		return (
 			count[b] - count[a] || a.toLowerCase().localeCompare(b.toLowerCase())
 		);
@@ -188,25 +220,25 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
  * - categoryBonus (0 or 10): 同分类加 10 分
  */
 export async function getRelatedPosts(
-	currentPost: CollectionEntry<"posts">,
+	currentPost: PostEntry,
 	maxCount = 5,
 ): Promise<PostForList[]> {
-	const allPosts = await getCollection<"posts">("posts", ({ data }) => {
-		return import.meta.env.PROD ? data.draft !== true : true;
-	});
+	const allPosts = asPostEntries(
+		await getCollection("posts", keepPublishedPost),
+	);
 
 	// 排除自身和加密文章
 	const candidates = allPosts.filter(
-		(p) => p.id !== currentPost.id && !p.data.password,
+		(p: PostEntry) => p.id !== currentPost.id && !p.data.password,
 	);
 
-	const currentTags = new Set(currentPost.data.tags || []);
+	const currentTags = new Set<string>(currentPost.data.tags || []);
 	const currentTokens = tokenizeTitle(currentPost.data.title);
 	const currentCategory = currentPost.data.category || "";
 	const now = Date.now();
 
-	const scored = candidates.map((post) => {
-		const postTags = new Set(post.data.tags || []);
+	const scored = candidates.map((post: PostEntry) => {
+		const postTags = new Set<string>(post.data.tags || []);
 
 		// tagMatchScore (0-100)
 		const tagMatchScore = jaccardSimilarity(currentTags, postTags) * 100;
