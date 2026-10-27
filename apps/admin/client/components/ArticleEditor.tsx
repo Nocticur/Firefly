@@ -62,7 +62,7 @@ const ArticleImage = Node.create({
 	name: "image", inline: false, group: "block", atom: true, draggable: true,
 	addAttributes: () => ({ src: { default: null }, alt: { default: "" }, title: { default: null } }),
 	parseHTML: () => [{ tag: "img[src]", getAttrs: (element) => isSafeImageSource((element as HTMLElement).getAttribute("src") ?? "") ? null : false }],
-	renderHTML: ({ HTMLAttributes }) => ["img", { ...HTMLAttributes, src: imageDisplaySource(String(HTMLAttributes.src ?? "")) }],
+	renderHTML: ({ HTMLAttributes }) => ["img", { ...HTMLAttributes, src: imageDisplaySource(String(HTMLAttributes.src ?? "")), referrerpolicy: "no-referrer" }],
 	markdownTokenName: "image",
 	parseMarkdown: (token) => ({ type: "image", attrs: { src: token.href, alt: token.text ?? "", title: token.title ?? null } }),
 	renderMarkdown: (node) => `![${String(node.attrs?.alt ?? "").replace(/[\\\[\]]/g, "\\$&")}](${String(node.attrs?.src ?? "").replace(/[()\\]/g, "\\$&")}${node.attrs?.title ? ` "${String(node.attrs.title).replace(/["\\]/g, "\\$&")}"` : ""})`,
@@ -289,8 +289,8 @@ export function ArticleEditor({ source, onChange, media = [] }: ArticleEditorPro
 			<label>{dialog.kind === "math" ? "LaTeX" : "地址 / URL"}{dialog.kind === "math" ? <textarea autoFocus value={dialog.value} onChange={(event) => setDialog({ ...dialog, value: event.target.value })} placeholder="\\frac{a}{b}" /> : <input autoFocus value={dialog.value} onChange={(event) => setDialog({ ...dialog, value: event.target.value })} placeholder="https://" />}</label>
 			{dialog.kind === "math" && dialog.pos === undefined && <label className="ff-dialog-checkbox"><input type="checkbox" checked={dialog.block} onChange={(event) => setDialog({ ...dialog, block: event.target.checked })} /> 块公式 / Block math</label>}
 			{dialog.kind === "image" && <><label>替代文本 / Alt text<input value={dialog.alt ?? ""} onChange={(event) => setDialog({ ...dialog, alt: event.target.value })} /></label>
-				<div className="ff-editor-upload"><label className="ff-editor-upload-button">{uploading ? "上传中…" : "从本地上传图片"}<input type="file" accept="image/*" hidden disabled={uploading} onChange={(event) => void uploadFromDisk(event.target.files?.[0])} /></label></div>
-				{media.some((item) => item.contentType.startsWith("image/")) && <div className="ff-editor-media-picker"><p>选择已上传图片 · 私有引用会随显式发布转换</p>{media.filter((item) => item.contentType.startsWith("image/")).map((item) => <button type="button" key={item.id} onClick={() => setDialog({ ...dialog, value: `media:${item.id}`, alt: item.alt })}><img src={item.publishedUrl || item.url || ""} alt={item.alt} loading="lazy" /><span>{item.name}</span></button>)}</div>}</>}
+				<div className="ff-editor-upload"><label className="ff-editor-upload-button">{uploading ? "上传中…" : "从本地上传图片"}<input type="file" accept="image/*" hidden disabled={uploading} onChange={(event) => { void uploadFromDisk(event.target.files?.[0]); event.target.value = ""; }} /></label></div>
+				{media.some((item) => item.contentType.startsWith("image/")) && <div className="ff-editor-media-picker"><p>选择已上传图片 · 私有引用会随显式发布转换</p>{media.filter((item) => item.contentType.startsWith("image/")).map((item) => <button type="button" key={item.id} onClick={() => setDialog({ ...dialog, value: `media:${item.id}`, alt: item.alt })}><img src={item.publishedUrl || item.url || ""} alt={item.alt} loading="lazy" referrerPolicy="no-referrer" /><span>{item.name}</span></button>)}</div>}</>}
 			{error && <p className="ff-dialog-error" role="alert">{error}</p>}
 			<div className="ff-dialog-actions"><button type="button" onClick={() => setDialog(null)}>取消</button><button type="submit"><Check size={15} /> 确认</button></div>
 		</form></div>}

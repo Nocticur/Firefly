@@ -117,7 +117,7 @@ test("media import rejects disallowed URLs before DNS and rejects any private DN
 	for (const address of ["8.8.8.8", "198.51.0.1", "203.0.1.1", "2606:4700:4700::1111"]) assert.equal(isPublicAddress(address), true, address);
 });
 
-test("multipart upload forwards bytes to the image host and records the published URL", async () => {
+test("multipart upload stores a private project draft without calling the image host", async () => {
 	await environment(baseEnv(), async () => {
 		const { store, session } = await authenticatedStore();
 		const bed = imageBedMock();
@@ -129,29 +129,25 @@ test("multipart upload forwards bytes to the image host and records the publishe
 			const response = await appFor(store).request(`${origin}/api/media/upload`, { method: "POST", headers: authHeaders(session, false), body: form });
 			assert.equal(response.status, 201);
 			const body = await response.json() as { data: Record<string, unknown> };
-			assert.equal(body.data.publishedUrl, uploadedUrl);
-			assert.equal(body.data.url, uploadedUrl);
-			assert.equal(body.data.contentUrl, uploadedUrl);
-			assert.equal(body.data.access, "public");
+			assert.equal(body.data.publishedUrl, undefined);
+			assert.equal(body.data.url, `/api/media/${body.data.id}/content`);
+			assert.equal(body.data.contentUrl, body.data.url);
+			assert.equal(body.data.access, "private");
 			assert.equal(body.data.name, "cover.png");
 			assert.equal(body.data.contentType, "image/png");
 			assert.equal(body.data.size, png.length);
 			assert.equal(body.data.alt, "封面");
 			assert.equal(body.data.caption, "图注");
 
-			assert.equal(bed.calls.length, 1);
-			assert.equal(bed.calls[0]!.url.origin, "https://image.example");
-			assert.equal(bed.calls[0]!.url.pathname, "/upload");
-			assert.equal(bed.calls[0]!.authorization, "Bearer test-token");
-			const uploaded = bed.calls[0]!.form.get("file");
-			assert.ok(uploaded instanceof Blob);
-			assert.deepEqual(Buffer.from(await uploaded.arrayBuffer()), png);
+			assert.equal(bed.calls.length, 0, "local uploads are never sent to ImgBed");
 
 			const rows = Object.values(collection(await store.read(), "entities")).filter((row) => row.kind === "media");
 			assert.equal(rows.length, 1);
 			assert.equal((rows[0]!.data as Record<string, unknown>).digest, hash(png));
-			assert.equal((rows[0]!.data as Record<string, unknown>).publishedUrl, uploadedUrl);
-			assert.equal((rows[0]!.data as Record<string, unknown>).pathname, undefined);
+			assert.equal((rows[0]!.data as Record<string, unknown>).publishedUrl, undefined);
+			assert.equal((rows[0]!.data as Record<string, unknown>).pathname, `public/uploads/${body.data.id}.png`);
+			assert.equal((rows[0]!.data as Record<string, unknown>).draftPending, true);
+			assert.deepEqual(await store.readMediaBlob(String(body.data.id)), png);
 		} finally { bed.restore(); }
 	});
 });
@@ -196,7 +192,7 @@ test("multipart upload sniffs bytes and rejects active SVG or a mismatched decla
 			const response = await app.request(`${origin}/api/media/upload`, { method: "POST", headers: authHeaders(session, false), body: mismatch });
 			assert.equal(response.status, 415);
 			assert.equal((await response.json() as { error: { code: string } }).error.code, "UPLOAD_CONTENT_MISMATCH");
-			assert.equal(bed.calls.length, 1, "only the accepted static SVG is forwarded to the image host");
+			assert.equal(bed.calls.length, 0, "accepted local SVG uploads are not forwarded to the image host");
 		} finally { bed.restore(); }
 	});
 });

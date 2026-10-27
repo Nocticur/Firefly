@@ -41,9 +41,8 @@ function sameStore(left: StorageConfig, right: StorageConfig): boolean {
 }
 
 /**
- * Cloudflare KV is optional now that the Git repository is the source of truth for
- * content and settings. It is only consulted when explicitly configured, and a
- * partially configured production KV is still rejected so no data leaks between stores.
+ * Cloudflare KV stores private local-image drafts and optional admin state; a
+ * partially configured environment is rejected rather than silently falling back.
  */
 export function storageConfig(
 	env: NodeJS.ProcessEnv = process.env,

@@ -35,14 +35,14 @@ for (const kind of ["settings", "navigation", "icons"]) {
 	route("get", `/api/${kind}`, "Settings", `Read ${kind}`);
 	route("put", `/api/${kind}`, "Settings", `Save private ${kind} revision`, false, { data: { type: "object" }, expectedRevision: revision }, ["data", "expectedRevision"]);
 }
-route("get", "/api/media", "Media", "List image host media metadata");
-route("post", "/api/media/upload", "Media", "Upload one image as multipart/form-data (file, alt, caption), at most 4 MiB, and store it on the image host");
+route("get", "/api/media", "Media", "List published media and private project-image drafts");
+route("post", "/api/media/upload", "Media", "Upload one image as multipart/form-data (file, alt, caption), at most 4 MiB, into a private draft; explicit publication commits it to the project");
 paths["/api/media/upload"]!.post.requestBody = { required: true, content: { "multipart/form-data": { schema: { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary" }, alt: string, caption: string } } } } };
-route("get", "/api/media/{id}/content", "Media", "Redirect (302) to the public image host URL");
-(paths["/api/media/{id}/content"]!.get.responses as Record<string, unknown>)["302"] = { description: "Redirect to the image host", headers: { location: { schema: { type: "string" } } } };
+route("get", "/api/media/{id}/content", "Media", "Read a private draft image for authenticated preview, or redirect to its published URL");
+(paths["/api/media/{id}/content"]!.get.responses as Record<string, unknown>)["302"] = { description: "Redirect to a published image URL", headers: { location: { schema: { type: "string" } } } };
 route("post", "/api/media/import", "Media", "Download an allowlisted direct HTTPS image (max 32 MiB) and store it on the image host", false, { url: string, alt: string, caption: string }, ["url"]);
 route("patch", "/api/media/{id}", "Media", "Save alternative text and caption independently", false, { alt: string, caption: string });
-route("delete", "/api/media/{id}", "Media", "Tombstone media metadata; the image host copy stays public");
+route("delete", "/api/media/{id}", "Media", "Tombstone media metadata and remove an unpublished private image draft; published project files remain in Git");
 route("get", "/api/public/comments", "Public interactions", "Read visible comments and deleted reply placeholders", true);
 route("post", "/api/public/comments", "Public interactions", "Post plain text after Turnstile, origin, ban and rate checks", true, { articleId: string, parentId: string, name: string, email: string, body: string, turnstileToken: string }, ["articleId", "name", "body", "turnstileToken"]);
 route("get", "/api/public/friends", "Public interactions", "Read last verified public friend snapshot", true);

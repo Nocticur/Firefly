@@ -4,7 +4,7 @@ import { isIP } from "node:net";
 import { request as httpsRequest } from "node:https";
 import { requireAdmin } from "./auth.js";
 import { getStore, getSiteId, collection, assertSite, type FileStore } from "./file-store.js";
-import { ApiFailure, readJson } from "./security.js";
+import { ApiFailure, readJson, runtimeEnvironment } from "./security.js";
 import type { AdminApp } from "./types.js";
 import { defaultMediaImportHosts } from "./runtime-config.js";
 import { uploadToImageBed } from "./image-host.js";
@@ -16,7 +16,7 @@ export const MAX_UPLOAD_SIZE = 4 * 1024 * 1024;
 const MAX_UPLOAD_BODY = MAX_UPLOAD_SIZE + 256 * 1024;
 const MAX_NAME_LENGTH = 255;
 const EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/avif": "avif", "image/svg+xml": "svg", "image/x-icon": "ico", "image/vnd.microsoft.icon": "ico" };
-type Media = Record<string, unknown> & { id: string; name: string; contentType: string; size: number; ownerId: string; alt: string; caption: string; digest: string; createdAt: string; publishedUrl?: string; pathname?: string; deleted?: boolean };
+type Media = Record<string, unknown> & { id: string; name: string; contentType: string; size: number; ownerId: string; alt: string; caption: string; digest: string; createdAt: string; publishedUrl?: string; pathname?: string; draftPending?: boolean; deleted?: boolean };
 
 export function safeMediaType(bytes: Uint8Array): string {
 	const b = Buffer.from(bytes);
@@ -48,27 +48,36 @@ function publishedUrlOf(value: unknown): string | undefined {
 
 export function publicMedia(record: Media) {
 	const publishedUrl = publishedUrlOf(record.publishedUrl);
-	return { id: record.id, name: record.name, contentType: record.contentType, size: record.size, access: "public", alt: record.alt, caption: record.caption, createdAt: record.createdAt, url: publishedUrl, contentUrl: publishedUrl, publishedUrl };
+	const url = publishedUrl || `/api/media/${encodeURIComponent(record.id)}/content`;
+	return { id: record.id, name: record.name, contentType: record.contentType, size: record.size, access: publishedUrl ? "public" as const : "private" as const, alt: record.alt, caption: record.caption, createdAt: record.createdAt, url, contentUrl: url, ...(publishedUrl ? { publishedUrl } : {}) };
 }
 async function mediaById(id: string): Promise<Media> {
 	const media = collection(await getStore().read(), "entities")[`media:${id}`]?.data as Media | undefined;
 	if (!media || media.deleted) throw new ApiFailure(404, "MEDIA_NOT_FOUND", "媒体不存在");
 	return media;
 }
-async function persistMedia(media: Media): Promise<void> {
-	await getStore().update((state) => { const now = new Date().toISOString(); collection(state, "entities")[`media:${media.id}`] ||= { id: media.id, kind: "media", data: media, revision: 1, created_at: now, updated_at: now }; });
+async function persistMedia(media: Media, store = getStore()): Promise<void> {
+	await store.update((state) => { const now = new Date().toISOString(); collection(state, "entities")[`media:${media.id}`] ||= { id: media.id, kind: "media", data: media, revision: 1, created_at: now, updated_at: now }; });
 }
 
-/**
- * Uploads the bytes to the image host first and only records the media once a public URL exists,
- * so a failed image-host call never leaves an unusable media row behind.
- */
+/** External URL imports go to the image host; local file uploads use saveProjectDraft below. */
 async function saveImage(bytes: Buffer, contentType: string, ownerId: string, metadata: { name?: string; alt: string; caption: string }): Promise<Media> {
 	const id = randomUUID();
 	const name = metadata.name || `${id}.${EXTENSIONS[contentType]}`;
 	const publishedUrl = await uploadToImageBed(bytes, name, contentType);
 	const media: Media = { id, name, contentType, size: bytes.length, ownerId, alt: metadata.alt, caption: metadata.caption, digest: createHash("sha256").update(bytes).digest("hex"), createdAt: new Date().toISOString(), publishedUrl };
 	await persistMedia(media);
+	return media;
+}
+
+async function saveProjectDraft(bytes: Buffer, contentType: string, ownerId: string, metadata: { name?: string; alt: string; caption: string }, store: FileStore): Promise<Media> {
+	if (runtimeEnvironment() !== "development" && !store.durableMediaBlobs) throw new ApiFailure(503, "MEDIA_DRAFT_STORAGE_REQUIRED", "本地图片上传需要先配置当前环境专用的 Cloudflare KV，以便私有草稿跨 Vercel 实例保存");
+	const id = randomUUID();
+	const name = metadata.name || `${id}.${EXTENSIONS[contentType]}`;
+	const pathname = `public/uploads/${id}.${EXTENSIONS[contentType]}`;
+	const media: Media = { id, name, contentType, size: bytes.length, ownerId, alt: metadata.alt, caption: metadata.caption, digest: createHash("sha256").update(bytes).digest("hex"), createdAt: new Date().toISOString(), pathname, draftPending: true };
+	await store.writeMediaBlob(id, bytes);
+	try { await persistMedia(media, store); } catch (error) { await store.deleteMediaBlob(id).catch(() => {}); throw error; }
 	return media;
 }
 
@@ -181,7 +190,7 @@ function assertDeclaredType(detected: string, declared: string): void {
 	throw new ApiFailure(415, "UPLOAD_CONTENT_MISMATCH", "文件实际内容与声明类型不符");
 }
 
-export type FrozenMedia = Record<string, unknown> & { id: string; digest: string; size: number; contentType: string; revision: number; pathname?: string; publishedUrl?: string };
+export type FrozenMedia = Record<string, unknown> & { id: string; digest: string; size: number; contentType: string; revision: number; pathname?: string; publishedUrl?: string; draftPending?: boolean };
 export type MediaPublicationOptions = {
 	store?: FileStore;
 	site?: string;
@@ -192,7 +201,7 @@ function validFrozenMedia(media: FrozenMedia | undefined, id: string): media is 
 	return Boolean(media && media.id === id && Object.hasOwn(EXTENSIONS, media.contentType) && /^[a-f0-9]{64}$/.test(media.digest) && Number.isSafeInteger(media.size) && media.size >= 1 && media.size <= MAX_MEDIA_SIZE && Number.isSafeInteger(media.revision) && media.revision >= 1);
 }
 
-/** The image host URL is byte-stable per media id, so only digest/size/type identify the record. */
+/** Image bytes are byte-stable per media id, so digest/size/type identify a frozen draft. */
 function sameMediaBytes(media: Media | undefined, frozen: FrozenMedia): boolean {
 	return Boolean(media && !media.deleted && media.digest === frozen.digest && media.size === frozen.size && media.contentType === frozen.contentType);
 }
@@ -221,6 +230,51 @@ export async function publishMediaForSnapshot(ids: string[], _taskId: string, op
 	return urls;
 }
 
+export async function prepareProjectMediaForSnapshot(ids: string[], options: MediaPublicationOptions & { publicOrigin: string }): Promise<{ urls: Record<string, string>; files: Array<{ path: string; source: string; encoding?: "base64" }> }> {
+	if (ids.length && !options.frozenMedia) throw new ApiFailure(409, "FROZEN_MEDIA_INVALID", "发布必须使用已冻结的媒体清单");
+	let origin: URL;
+	try { origin = new URL(options.publicOrigin); } catch { throw new ApiFailure(409, "SITE_URL_INVALID", "站点公开地址无效，无法生成项目图片地址"); }
+	if (origin.protocol !== "https:" || origin.username || origin.password) throw new ApiFailure(409, "SITE_URL_INVALID", "站点公开地址必须使用 HTTPS");
+	const store = options.store || getStore(); const site = options.site || getSiteId();
+	const urls: Record<string, string> = {}; const files: Array<{ path: string; source: string; encoding?: "base64" }> = [];
+	for (const id of [...new Set(ids)]) {
+		const frozen = options.frozenMedia?.[id];
+		if (!validFrozenMedia(frozen, id)) throw new ApiFailure(409, "FROZEN_MEDIA_INVALID", "冻结媒体记录不完整");
+		const remoteUrl = publishedUrlOf(frozen.publishedUrl);
+		if (remoteUrl) { urls[id] = remoteUrl; continue; }
+		const expectedPath = `public/uploads/${id}.${EXTENSIONS[frozen.contentType]}`;
+		if (frozen.draftPending !== true || frozen.pathname !== expectedPath) throw new ApiFailure(409, "MEDIA_DRAFT_MISSING", "图片不是可发布的项目草稿，请在媒体库重新上传");
+		const state = await store.read(); assertSite(state, site);
+		const row = collection(state, "entities")[`media:${id}`]; const current = row?.data as Media | undefined;
+		if (!sameMediaBytes(current, frozen) || current?.draftPending !== true) throw new ApiFailure(409, "MEDIA_REVISION_CONFLICT", "图片草稿已变化，请刷新媒体库后重新发布");
+		const bytes = await store.readMediaBlob(id);
+		if (!bytes || bytes.length !== frozen.size || createHash("sha256").update(bytes).digest("hex") !== frozen.digest) throw new ApiFailure(409, "MEDIA_DRAFT_INVALID", "私有图片草稿缺失或校验失败，请重新上传");
+		files.push({ path: expectedPath, source: bytes.toString("base64"), encoding: "base64" });
+		urls[id] = new URL(`/${expectedPath.slice("public/".length)}`, origin).href;
+	}
+	return { urls, files };
+}
+
+export async function finalizeProjectMedia(ids: string[], frozenMedia: Record<string, FrozenMedia> | undefined, publicOrigin: string, store: FileStore, site: string): Promise<void> {
+	let origin: URL;
+	try { origin = new URL(publicOrigin); } catch { throw new ApiFailure(409, "SITE_URL_INVALID", "站点公开地址无效，无法完成项目图片入库"); }
+	if (origin.protocol !== "https:" || origin.username || origin.password) throw new ApiFailure(409, "SITE_URL_INVALID", "站点公开地址必须使用 HTTPS");
+	for (const id of [...new Set(ids)]) {
+		const frozen = frozenMedia?.[id];
+		if (!frozen || frozen.draftPending !== true || !frozen.pathname) continue;
+		const url = new URL(`/${frozen.pathname.slice("public/".length)}`, origin).href;
+		const updated = await store.update((state) => {
+			assertSite(state, site);
+			const row = collection(state, "entities")[`media:${id}`]; const media = row?.data as Media | undefined;
+			if (!row || !media || !sameMediaBytes(media, frozen)) return Boolean(media?.publishedUrl === url && media.draftPending === false);
+			media.publishedUrl = url; media.draftPending = false; row.updated_at = new Date().toISOString();
+			return true;
+		});
+		if (!updated) throw new ApiFailure(409, "MEDIA_REVISION_CONFLICT", "图片记录已变化，私有草稿尚未清理");
+		await store.deleteMediaBlob(id);
+	}
+}
+
 export function registerMediaRoutes(app: AdminApp): void {
 	app.get("/api/media", requireAdmin, async (c) => {
 		const rows = Object.values(collection(await getStore().read(), "entities")).filter((row) => row.kind === "media" && !(row.data as Media).deleted).sort((a,b) => String(b.created_at).localeCompare(String(a.created_at))) as Array<{ data: Media }>;
@@ -243,14 +297,17 @@ export function registerMediaRoutes(app: AdminApp): void {
 		const declared = String(file.type || "").toLowerCase().trim();
 		if (declared && !Object.hasOwn(EXTENSIONS, declared)) throw new ApiFailure(415, "UNSUPPORTED_MEDIA", "文件内容不是支持的图片或图标");
 		assertDeclaredType(detected, declared);
-		const media = await saveImage(bytes, detected, c.get("user").id, { name: uploadedFilename(String(file.name || "")), alt: formText(form.get("alt"), 1000), caption: formText(form.get("caption"), 5000) });
+		const media = await saveProjectDraft(bytes, detected, c.get("user").id, { name: uploadedFilename(String(file.name || "")), alt: formText(form.get("alt"), 1000), caption: formText(form.get("caption"), 5000) }, getStore());
 		return c.json({ data: publicMedia(media) }, 201);
 	});
 	app.get("/api/media/:id/content", requireAdmin, async (c) => {
 		const media = await mediaById(c.req.param("id"));
 		const target = publishedUrlOf(media.publishedUrl);
-		if (!target) throw new ApiFailure(404, "MEDIA_NOT_FOUND", "媒体尚未迁移到图床");
-		return new Response(null, { status: 302, headers: { Location: target, "Cache-Control": "no-store" } });
+		if (target) return new Response(null, { status: 302, headers: { Location: target, "Cache-Control": "no-store" } });
+		if (!media.draftPending) throw new ApiFailure(404, "MEDIA_NOT_FOUND", "图片尚未发布或私有草稿已清理");
+		const bytes = await getStore().readMediaBlob(media.id);
+		if (!bytes || bytes.length !== media.size || createHash("sha256").update(bytes).digest("hex") !== media.digest) throw new ApiFailure(503, "MEDIA_DRAFT_INVALID", "私有图片草稿缺失或校验失败");
+		return new Response(new Uint8Array(bytes), { headers: { "Content-Type": media.contentType, "Content-Length": String(bytes.length), "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } });
 	});
 	app.post("/api/media/import", requireAdmin, async (c) => {
 		const body = await readJson(c.req.raw, 65536); const bytes = await importBytes(String(body.url || "")); const contentType = safeMediaType(bytes);
@@ -266,7 +323,16 @@ export function registerMediaRoutes(app: AdminApp): void {
 	});
 	app.delete("/api/media/:id", requireAdmin, async (c) => {
 		const media = await mediaById(c.req.param("id"));
-		// Tombstone only. The image host keeps serving the already published public copy.
-		await getStore().update((state) => { const row = collection(state, "entities")[`media:${media.id}`]; if (row) { row.data = { ...(row.data as Media), deleted: true }; row.revision = Number(row.revision)+1; row.updated_at = new Date().toISOString(); } }); return c.json({ data: { id: media.id, deleted: true } });
+		const store = getStore();
+		const draftBytes = media.draftPending ? await store.readMediaBlob(media.id) : null;
+		if (media.draftPending && (!draftBytes || draftBytes.length !== media.size || createHash("sha256").update(draftBytes).digest("hex") !== media.digest)) throw new ApiFailure(503, "MEDIA_DRAFT_INVALID", "私有图片草稿缺失或校验失败，未删除媒体记录");
+		if (draftBytes) await store.deleteMediaBlob(media.id);
+		try {
+			await store.update((state) => { const row = collection(state, "entities")[`media:${media.id}`]; if (row) { row.data = { ...(row.data as Media), deleted: true }; row.revision = Number(row.revision)+1; row.updated_at = new Date().toISOString(); } });
+		} catch (error) {
+			if (draftBytes) await store.writeMediaBlob(media.id, draftBytes).catch(() => {});
+			throw error;
+		}
+		return c.json({ data: { id: media.id, deleted: true } });
 	});
 }

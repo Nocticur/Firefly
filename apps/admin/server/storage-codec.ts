@@ -18,6 +18,12 @@ export function coldStateKey(site: string): string {
 	return `admin-state:${digest}:cold`;
 }
 
+export function mediaBlobKey(site: string, id: string): string {
+	if (!/^[a-f0-9-]{36}$/i.test(id)) throw new TypeError("Invalid media id");
+	const digest = createHash("sha256").update(site).digest("hex");
+	return `admin-state:${digest}:media:${id}`;
+}
+
 export function encodeState(json: string): string {
 	return gzipSync(Buffer.from(json, "utf8"), { level: 9 }).toString("base64");
 }

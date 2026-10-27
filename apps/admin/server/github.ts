@@ -1,7 +1,7 @@
 import { createSign } from "node:crypto";
 import { assertDeploymentConfigRedirects } from "./release-format.js";
 
-export type RepositoryFile = { path: string; source: string };
+export type RepositoryFile = { path: string; source: string; encoding?: "base64" };
 export class GitHubError extends Error {
 	constructor(public status: number, message: string, public uncertain = false, public conflict = false) { super(message); }
 }
@@ -97,7 +97,7 @@ async function accessToken(write: boolean): Promise<string> {
 }
 function managedPath(path: string): boolean {
 	if (typeof path !== "string" || /[\\\x00-\x1f\x7f]/.test(path) || path.split("/").some((part) => part === "" || part === "." || part === "..")) return false;
-	return path === "vercel.json" || /^src\/content\/posts\/.+\.mdx?$/.test(path) || /^src\/data\/(published-state|managed-settings|redirects)\.json$/.test(path) || /^src\/config\/(siteConfig|profileConfig|navBarConfig|friendsConfig)\.ts$/.test(path);
+	return path === "vercel.json" || /^src\/content\/posts\/.+\.mdx?$/.test(path) || /^src\/data\/(published-state|managed-settings|redirects)\.json$/.test(path) || /^src\/config\/(siteConfig|profileConfig|navBarConfig|friendsConfig)\.ts$/.test(path) || /^public\/uploads\/[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.(?:png|jpg|gif|webp|avif|svg|ico)$/.test(path);
 }
 const publishPath = (path: string) => managedPath(path) && !path.startsWith("src/config/");
 const deletePath = (path: string) => managedPath(path) && path.startsWith("src/content/posts/");
@@ -135,7 +135,9 @@ export async function readRepositoryFiles(sha?: string): Promise<{ headSha: stri
 		files.push(...await Promise.all(items.slice(offset, offset + 8).map(async (item) => {
 			const blob = await request<{ encoding: string; content: string }>(`${repoPath()}/git/blobs/${item.sha}`);
 			if (blob.encoding !== "base64") throw new Error("Unsupported GitHub blob encoding");
-			return { path: item.path, source: Buffer.from(blob.content, "base64").toString("utf8") };
+			return item.path.startsWith("public/uploads/")
+				? { path: item.path, source: Buffer.from(blob.content, "base64").toString("base64"), encoding: "base64" as const }
+				: { path: item.path, source: Buffer.from(blob.content, "base64").toString("utf8") };
 		})));
 	}
 	const state = files.find((file) => file.path === "src/data/published-state.json");
@@ -148,7 +150,12 @@ export const githubProvider: GitHubProvider = {
 		if (!validSha(baseSha)) throw new GitHubError(400, "Invalid expected branch head");
 		const additions = new Set<string>(); const removed = new Set<string>();
 		for (const file of files) {
-			if (!publishPath(file.path) || typeof file.source !== "string" || additions.has(file.path)) throw new GitHubError(400, "Release additions must contain unique managed repository paths");
+			const projectAsset = file.path.startsWith("public/uploads/");
+			if (!publishPath(file.path) || typeof file.source !== "string" || additions.has(file.path) || projectAsset && file.encoding !== "base64" || file.encoding === "base64" && !projectAsset) throw new GitHubError(400, "Release additions must contain unique managed repository paths");
+			if (file.encoding === "base64") {
+				const bytes = Buffer.from(file.source, "base64");
+				if (!file.source || bytes.length > 4 * 1024 * 1024 || bytes.toString("base64") !== file.source) throw new GitHubError(400, "Project image additions must contain valid bounded base64 bytes");
+			}
 			additions.add(file.path);
 		}
 		for (const path of deletions) {
@@ -176,7 +183,7 @@ export const githubProvider: GitHubProvider = {
 				query: "mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){commit{oid}}}",
 				variables: { input: { branch: { repositoryNameWithOwner: coordinates.repository, branchName: coordinates.branch }, expectedHeadOid: baseSha,
 					message: { headline: `content: publish ${taskId}`, body: `Firefly-Task: ${taskId}\nFirefly-Snapshot-Digest: ${digest}` },
-					fileChanges: { additions: files.map((file) => ({ path: file.path, contents: Buffer.from(file.source).toString("base64") })), deletions: deletions.map((path) => ({ path })) } } },
+					fileChanges: { additions: files.map((file) => ({ path: file.path, contents: file.encoding === "base64" ? file.source : Buffer.from(file.source).toString("base64") })), deletions: deletions.map((path) => ({ path })) } } },
 			}),
 		});
 		const oid = result?.data?.createCommitOnBranch?.commit?.oid;

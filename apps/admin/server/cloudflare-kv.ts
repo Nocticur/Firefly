@@ -3,6 +3,7 @@ import { ApiFailure } from "./security.js";
 import {
 	MAX_KV_VALUE_BYTES,
 	coldStateKey,
+	mediaBlobKey,
 	decodeBackup,
 	decodeState,
 	encodeBackup,
@@ -179,6 +180,16 @@ export function createCloudflareKvDocumentBackend(
 		return true;
 	}
 	return {
+		async readMediaBlob(id) {
+			const value = await readValue(config, mediaBlobKey(site, id));
+			if (value === null) return null;
+			try { return Buffer.from(value, "base64"); }
+			catch { throw new ApiFailure(503, "FILE_STORE_INVALID", "私有图片草稿损坏，已停止读取"); }
+		},
+		async writeMediaBlob(id, bytes) {
+			await writeValue(config, mediaBlobKey(site, id), Buffer.from(bytes).toString("base64"));
+		},
+		async deleteMediaBlob(id) { await deleteValue(config, mediaBlobKey(site, id)); },
 		read: () => readDocument(key),
 		write: (json, expectedEtag) => writeDocument(key, json, expectedEtag),
 		readCold: () => readDocument(coldKey),

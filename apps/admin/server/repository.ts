@@ -7,7 +7,7 @@ import { readRepositoryFiles, personalToken, GitHubError } from "./github.js";
 import { deriveManagedSettings, MANAGED_SETTINGS_PATH } from "./managed-settings.js";
 import { ledgerFromBaseline, repositoryLedger } from "./release-format.js";
 
-type SourceFile = { path: string; source: string };
+type SourceFile = { path: string; source: string; encoding?: "base64" };
 type RepositoryReader = (sha?: string) => Promise<Awaited<ReturnType<typeof readRepositoryFiles>>>;
 type PublishedPost = { id?: string; filePath?: string; path?: string; slug?: string; sourceSha256?: string };
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
@@ -159,9 +159,22 @@ export async function ensureBaseline(store: FileStore, siteId: string): Promise<
 }export function compareRepositoryFiles(expected: SourceFile[], remote: SourceFile[]): RepositoryDifference[] {
 	const before = new Map(expected.map((file) => [file.path, file.source])); const after = new Map(remote.map((file) => [file.path, file.source]));
 	return [...new Set([...before.keys(), ...after.keys()])].sort().filter((path) => before.get(path) !== after.get(path)).map((path) => {
-		const expectedSource = before.get(path) ?? null; const remoteSource = after.get(path) ?? null;
-		return { path, expectedSource, remoteSource, expectedSha256: expectedSource === null ? null : digest(expectedSource), remoteSha256: remoteSource === null ? null : digest(remoteSource) };
+		const expectedValue = before.get(path) ?? null; const remoteValue = after.get(path) ?? null;
+		const isBinary = path.startsWith("public/uploads/");
+		const expectedSource = isBinary && expectedValue !== null ? "[图片二进制内容]" : expectedValue;
+		const remoteSource = isBinary && remoteValue !== null ? "[图片二进制内容]" : remoteValue;
+		return { path, expectedSource, remoteSource, expectedSha256: expectedValue === null ? null : digest(expectedValue), remoteSha256: remoteValue === null ? null : digest(remoteValue) };
 	});
+}
+
+/** Public content and generated site data must be reconciled before advancing the release baseline. */
+function isPublicRepositoryPath(path: string): boolean {
+	return path === "vercel.json"
+		|| path.startsWith("src/content/")
+		|| path.startsWith("src/data/")
+		|| path.startsWith("src/assets/")
+		|| path.startsWith("src/constants/")
+		|| path.startsWith("public/");
 }
 
 /** Only code-only Git changes may advance the baseline. Private file drafts stay untouched. */
@@ -189,17 +202,20 @@ export async function synchronizeRepository(store: FileStore, siteId: string, ex
 	const expectedHashes = new Map((expectedLedger ?? repositoryLedger(evidenceFiles!)).map((entry) => [entry.path, entry.sha256]));
 	const remoteHashes = new Map(repositoryLedger(remote.files).map((entry) => [entry.path, entry.sha256]));
 	const changed = [...new Set([...expectedHashes.keys(), ...remoteHashes.keys()])].filter((path) => expectedHashes.get(path) !== remoteHashes.get(path));
-	const differences = changed.length ? compareRepositoryFiles(await readEvidence(), remote.files) : [];
+	const publicChanges = changed.filter(isPublicRepositoryPath);
+	const differences = publicChanges.length
+		? compareRepositoryFiles(await readEvidence(), remote.files).filter((difference) => isPublicRepositoryPath(difference.path))
+		: [];
 	return store.update((state) => {
 		assertSite(state, siteId);
 		const current = collection(state, "entities")["repository:baseline"] as (Row & { data: Record<string, unknown> }) | undefined;
 		if (current?.data.headSha !== expectedHeadSha) throw new ApiFailure(409, "BASELINE_REVISION_CONFLICT", "核对期间仓库基线已变化，请重新读取");
 		if (Object.values(collection(state, "release_tasks")).some(row => row.kind === "publish" && (!["verified", "failed", "conflict"].includes(String(row.state)) || (row.details as Row | undefined)?.restoreRequiresReconciliation === true))) throw new ApiFailure(409, "PUBLISH_RECONCILIATION_REQUIRED", "先核查所有未完成或恢复的发布，再同步代码基线");
-		if (differences.length) throw new ApiFailure(409, "MANAGED_REPOSITORY_CONFLICT", "远端管理内容已变更；请审阅逐文件差异并通过独立合并处理，未推进基线且保留全部私有草稿", { baseSha: expectedHeadSha, remoteSha: remote.headSha, diff: differences });
+		if (differences.length) throw new ApiFailure(409, "MANAGED_REPOSITORY_CONFLICT", "远端公开内容、站点数据或部署配置已变更；请审阅逐文件差异并通过独立合并处理，未推进基线且保留全部私有草稿", { baseSha: expectedHeadSha, remoteSha: remote.headSha, diff: differences });
 		const next = { ...current.data };
 		delete next.repositoryFiles;
 		current.data = { ...next, headSha: remote.headSha, repositoryLedger: repositoryLedger(remote.files), synchronizedAt: new Date().toISOString() };
 		current.updated_at = new Date().toISOString(); current.revision = Number(current.revision) + 1;
-		return { synchronized: true, previousHeadSha: expectedHeadSha, headSha: remote.headSha, managedFiles: remote.files.length, message: "已确认管理文件字节完全相同，代码基线已同步；所有私有草稿保持原版本" };
+		return { synchronized: true, previousHeadSha: expectedHeadSha, headSha: remote.headSha, managedFiles: remote.files.length, message: "已确认公开内容、站点数据和部署配置未变化，代码基线已同步；所有私有草稿保持原版本" };
 	});
 }

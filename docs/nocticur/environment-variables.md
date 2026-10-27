@@ -1,6 +1,6 @@
 # 环境变量
 
-博客、`/admin/` 和 `/api/` 部署在同一个 Vercel `firefly` 项目。**Git 仓库是唯一数据源**：文章与站点设置都从仓库读取并写回仓库，图片走 CloudFlare-ImgBed。不需要数据库、建表或 SQL 迁移，也不需要 Cloudflare KV、Vercel Blob 或 Upstash。
+博客、`/admin/` 和 `/api/` 部署在同一个 Vercel `firefly` 项目。**Git 仓库是公开内容的唯一数据源**：文章与站点设置都从仓库读取并写回仓库。本地图片上传先作为私有草稿保存在 Cloudflare KV，显式发布后提交到项目的 `public/uploads/`；外链导入仍可使用 CloudFlare-ImgBed。私有本地图片草稿需要 Cloudflare KV；不使用数据库、Vercel Blob 或 Upstash。
 
 变量在 Vercel 项目 **Settings → Environment Variables** 中配置。生产 Secret 只勾选 **Production**；Vercel 需开启 **Enable access to System Environment Variables**，否则读不到平台注入的地址与项目编号。
 
@@ -12,8 +12,10 @@
 | `GITHUB_TOKEN` | GitHub **细粒度个人访问令牌**（Fine-grained PAT）；设为 **Secret** | 读写仓库里的文章与设置 |
 | `GITHUB_REPOSITORY` | 目标仓库；本项目为 `Nocticur/Firefly`，通常留空即用默认值 | 数据源仓库；不填时默认 `Nocticur/Firefly` |
 | `GITHUB_BRANCH` | 目标分支，例如 `master` | 读写分支；不填时默认 `master` |
-| `IMGBED_API_TOKEN` | CloudFlare-ImgBed API Token；使用媒体库时必填，设为 **Secret** | 服务端上传图片到图床 |
+| `IMGBED_API_TOKEN` | CloudFlare-ImgBed API Token；仅使用外链导入时需要，设为 **Secret** | 外链导入转存到图床；本地上传不使用此令牌 |
 | `IMGBED_BASE_URL` | 可选，默认 `https://image.nocticur.eu.cc` | 图床地址；只有地址改变时才填 |
+
+本地图片上传需要 Cloudflare KV 才能跨 Vercel 实例保存私有草稿：Production 配置 `CF_ACCOUNT_ID`、`CF_KV_NAMESPACE_ID`、`CF_API_TOKEN`，令牌需有 Workers KV Storage:Edit 权限。Preview 使用独立的 `ADMIN_PREVIEW_CF_ACCOUNT_ID`、`ADMIN_PREVIEW_CF_KV_NAMESPACE_ID`、`ADMIN_PREVIEW_CF_API_TOKEN`；不得与 Production 共用命名空间。开发环境可用进程内存。
 
 `GITHUB_TOKEN` 的权限：**Contents = Read and write**（提交文章与设置）、**Metadata = Read**（GitHub 强制要求）。令牌只授权目标仓库，不要授权全部仓库。
 
@@ -71,7 +73,7 @@ GitHub App（`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALLATION_I
 | `ADMIN_PREVIEW_ORIGIN` | 平台 `VERCEL_URL` | 预览环境管理源覆盖 |
 | `PUBLIC_PREVIEW_ORIGIN` | 平台 `VERCEL_URL` | 预览环境博客源覆盖 |
 
-开发/预览默认不需要任何存储配置：文章与设置照常从 Git 读取。若显式配置了独立 Cloudflare KV（`ADMIN_DEV_CF_*` / `ADMIN_PREVIEW_CF_*`），它必须与生产 KV 不同（比较账户 ID 与命名空间 ID），否则后台拒绝启动。每个非生产环境还需自己的后台密码与第三方服务凭据。本地默认 `development`，不需要 `APP_ENV`。
+开发默认可不配置存储；预览中的本地图片上传需配置独立 Cloudflare KV（`ADMIN_PREVIEW_CF_*`），且不能与生产 KV 共用。每个非生产环境还需自己的后台密码与第三方服务凭据。本地默认 `development`，不需要 `APP_ENV`。
 
 ## Vercel 自动提供，不要手填
 
@@ -85,7 +87,6 @@ GitHub App（`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALLATION_I
 
 - `BLOB_PRIVATE_READ_WRITE_TOKEN`、`BLOB_PUBLIC_READ_WRITE_TOKEN`
 - `ADMIN_DEV_PRIVATE_BLOB_TOKEN`、`ADMIN_PREVIEW_PRIVATE_BLOB_TOKEN`
-- `CF_ACCOUNT_ID`、`CF_KV_NAMESPACE_ID`、`CF_API_TOKEN`（已不再需要数据库）
 - `KV_PROVIDER`、`KV_REST_API_URL`、`KV_REST_API_TOKEN`
 - `UPSTASH_REDIS_REST_URL`、`UPSTASH_REDIS_REST_TOKEN`、`ADMIN_DEV_KV_REST_API_*`、`ADMIN_PREVIEW_KV_REST_API_*`
 - `ADMIN_ORIGIN`、`PUBLIC_SITE_ORIGIN`（已改为读取 Vercel 项目地址）
@@ -95,12 +96,13 @@ GitHub App（`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALLATION_I
 
 ## 数据存放位置
 
-**Git 仓库是唯一数据源**，没有数据库、键值存储或迁移命令：
+**Git 仓库是公开内容的唯一数据源**，没有数据库或迁移命令；Cloudflare KV 暂存待发布的本地图片字节：
 
 - 文章：`src/content/posts/**/*.md|mdx`，由后台直接读写并提交。草稿只是"尚未发布的编辑版本"，发布时会自动清除该文件的 `draft` 标记并上线，内容不会丢失。
 - 加密文章：编辑页勾选「保留为加密草稿」并填写密码，密码写入该文章 frontmatter 的 `password` 字段，随文章一起提交到仓库，不需要任何环境变量。
 - 站点设置、导航、图标：`src/data/managed-settings.json`。
 - 发布清单：`src/data/published-state.json`；重定向：`src/data/redirects.json`。
+- 本地上传的图片字节在发布核验成功前保存在独立的 Cloudflare KV 键中；生产环境没有配置 KV 时，本地图片上传会明确失败，不会写入 Vercel 临时磁盘。本次发布包含所有已上传的本地图片草稿；核验成功后，图片已进入 Git 的 `public/uploads/`，对应 KV 字节会删除。
 - 评论、友链、访客封禁等少量运行时写入保存在后台状态中；未配置 Cloudflare KV 时使用进程内存，重启即清空。
 
 ### AI 生成摘要（可选）
@@ -117,23 +119,24 @@ GitHub App（`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALLATION_I
 
 ### 草稿与历史存在哪里
 
-草稿不会推进 Git，所以要有个地方存：
+文章草稿不会推进 Git，所以要有个地方存：
 
 | 配置 | 草稿 / 版本历史 / 评论 / 媒体记录 | 适合 |
 | --- | --- | --- |
-| 不配 KV | 进程内存，重启或多实例访问即丢 | 只用后台改文章并立即发布 |
-| 配了 Cloudflare KV（`CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` / `CF_API_TOKEN`） | 写入 KV，持久化 | 需要保留草稿与审核记录 |
+| 不配 KV | 普通后台状态在进程内存；Production/Preview 禁止本地图片上传 | 不上传本地图片，仅使用现有 Git 内容 |
+| 配了 Cloudflare KV（`CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` / `CF_API_TOKEN`） | 普通后台状态与私有图片草稿持久化 | 需要保存文章草稿、审核记录或上传本地图片 |
 
 **发布核验通过后会自动清理**：该次发布涉及的已入库文章，其本地版本历史（`post_version:*`）会被删除，避免每保存一次就在状态文档里多留一份全文副本；未发布文章的历史不受影响。已发布的正文本身仍在 Git 里，不会因为这次清理而丢失。发布快照由每日维护按 30 天保留期回收。
 
 ### 状态为什么分两份存
 
-KV 里是两个键，不是一个：
+后台状态文档分为两个 KV 键；每张待发布图片另有一个独立 KV 键：
 
 | 键 | 内容 | 何时读 |
 | --- | --- | --- |
 | `admin-state:<hash>:data` | 文章、设置、导航、任务、评论、友链、媒体、基线哈希清单 | 每个后台请求 |
 | `admin-state:<hash>:cold` | 文章历史版本、发布快照 | 只在打开「历史」或执行/核查发布时 |
+| `admin-state:<hash>:media:<uuid>` | 一张待发布本地图片的 Base64 字节 | 上传预览、冻结发布、发布后清理 |
 
 拆开是因为后者体积大、访问少：合成一份会让每次请求都下载解析包含所有历史和快照的文档。旧部署升级后，第一次打开后台会自动把历史与快照迁到冷文档，再把它们从主文档删掉，无需手动操作。
 

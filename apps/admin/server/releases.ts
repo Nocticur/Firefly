@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { start } from "workflow/api";
 import type { AdminApp } from "./types.js";
@@ -21,7 +21,8 @@ export type FrozenSnapshot = {
 	files: RepositoryFile[]; deletions: string[]; settings: Record<string, unknown>; redirects: Redirect[];
 	entityRevisions: Array<{ kind: string; id: string; revision: number }>; friendIds: string[];
 	friendRevisions: Record<string, number>; selectedIds: string[];
-	media?: Record<string, Row & { id: string; publishedUrl: string; pathname?: string; digest: string; size: number; contentType: string; revision: number }>;
+	media?: Record<string, Row & { id: string; publishedUrl?: string; pathname?: string; draftPending?: boolean; digest: string; size: number; contentType: string; revision: number }>;
+	mediaAssets?: Array<{ id: string; path: string; digest: string; size: number }>;
 	originalSettings?: Record<string, unknown>;
 	deploymentConfig?: Record<string, unknown>;
 	repositoryLedger?: RepositoryLedgerEntry[];
@@ -130,16 +131,21 @@ export async function freezeRelease(input: z.infer<typeof releaseInput>, store =
 		try { snapshot.deploymentConfig = buildDeploymentConfig(base.deploymentConfig, redirects, previousRedirects); }
 		catch (error) { throw new ApiFailure(409, "PERMANENT_REDIRECT_CONFIGURATION_REQUIRED", (error as Error).message); }
 		if (snapshot.deploymentConfig) files.push({ path: "vercel.json", source: `${JSON.stringify(snapshot.deploymentConfig, null, 2)}\n` });
-		const mediaIds = referencedMedia(sources, settings);
+		const referencedMediaIds = referencedMedia(sources, settings);
+		const pendingMediaIds = Object.values(entities).filter((row) => row.kind === "media" && (row.data as Row)?.draftPending === true).map((row) => String((row.data as Row).id));
+		const mediaIds = [...new Set([...referencedMediaIds, ...pendingMediaIds])];
 		const mediaRows = mediaIds.map((id) => entities[`media:${id}`]).filter((row): row is Row => Boolean(row));
 		snapshot.media = {};
 		for (const mediaId of mediaIds) {
 			const mediaRow = mediaRows.find((row) => row.id === mediaId); const data = mediaRow?.data as Row | undefined;
-			if (!mediaRow || !data || data.deleted || typeof data.publishedUrl !== "string" || !/^https:\/\//.test(data.publishedUrl) || typeof data.digest !== "string" || typeof data.contentType !== "string" || typeof data.size !== "number") throw new ApiFailure(409, "MEDIA_REFERENCE_INVALID", "发布快照中的媒体不存在、尚未迁移到图床或记录不完整", { id: mediaId });
-			snapshot.media[mediaId] = { ...data, id: mediaId, publishedUrl: data.publishedUrl, digest: data.digest, contentType: data.contentType, size: data.size, revision: Number(mediaRow.revision) };
+			const extensions: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/avif": "avif", "image/svg+xml": "svg", "image/x-icon": "ico", "image/vnd.microsoft.icon": "ico" };
+			const hasPublishedUrl = typeof data?.publishedUrl === "string" && /^https:\/\//.test(data.publishedUrl);
+			const projectDraft = data?.draftPending === true && Number.isSafeInteger(data.size) && Number(data.size) > 0 && Number(data.size) <= 4 * 1024 * 1024 && data.pathname === `public/uploads/${mediaId}.${extensions[String(data.contentType)]}`;
+			if (!mediaRow || !data || data.deleted || (!hasPublishedUrl && !projectDraft) || typeof data.digest !== "string" || typeof data.contentType !== "string" || typeof data.size !== "number") throw new ApiFailure(409, "MEDIA_REFERENCE_INVALID", "发布快照中的媒体不存在、尚未迁移到项目资源或记录不完整", { id: mediaId });
+			snapshot.media[mediaId] = { ...data, id: mediaId, ...(hasPublishedUrl ? { publishedUrl: data.publishedUrl as string } : {}), digest: data.digest, contentType: data.contentType, size: data.size, revision: Number(mediaRow.revision) };
 		}
 		snapshot.originalSettings = structuredClone(settings);
-		for (const file of files) if (!(file.path === "vercel.json" || /^src\/(?:content\/posts\/[^\0]+\.mdx?|data\/(?:published-state|managed-settings|redirects)\.json)$/.test(file.path)) || file.path.split("/").includes("..")) throw new ApiFailure(400, "UNSAFE_REPOSITORY_PATH", "发布路径不在允许的内容目录");
+		for (const file of files) if (!(file.path === "vercel.json" || /^src\/(?:content\/posts\/[^\0]+\.mdx?|data\/(?:published-state|managed-settings|redirects)\.json)$/.test(file.path) || /^public\/uploads\/[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.(?:png|jpg|gif|webp|avif|svg|ico)$/.test(file.path)) || file.path.split("/").includes("..")) throw new ApiFailure(400, "UNSAFE_REPOSITORY_PATH", "发布路径不在允许的内容目录");
 		const now = new Date().toISOString();
 		collection(cold, "release_snapshots")[snapshotId] = { id: snapshotId, digest, data: snapshot, created_at: now };
 		const task: ReleaseTaskRow = { id: taskId, kind: "publish", idempotency_key: input.idempotencyKey, state: "preparing", snapshot_id: snapshotId, base_sha: base.headSha, target_sha: null, production_sha: null, deployment_id: null, message: null, details: {}, fence: null, created_at: now, updated_at: now };
@@ -238,6 +244,18 @@ export const deploymentProvider: DeploymentProvider = {
 		}));
 		if (manifests.some((manifest) => !manifest || manifest.schemaVersion !== 1 || manifest.gitSha !== targetSha || manifest.publicContentDigest !== snapshot.digest || manifest.snapshotId !== snapshot.id || (manifest.taskId || manifest.releaseTaskId) !== snapshot.taskId)) return { status: "waiting", message: "部署地址及生产域名发布清单尚未同时匹配冻结快照" };
 		if (canonicalJson(manifests[0]) !== canonicalJson(manifests[1])) return { status: "waiting", message: "生产域名与部署产物清单不同" };
+		for (const asset of snapshot.mediaAssets ?? []) {
+			if (!/^public\/uploads\/[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.(?:png|jpg|gif|webp|avif|svg|ico)$/.test(asset.path) || !/^[a-f0-9]{64}$/.test(asset.digest) || !Number.isSafeInteger(asset.size) || asset.size < 1 || asset.size > 4 * 1024 * 1024) return { status: "failed", message: "冻结图片清单无效", deploymentId: deployedId };
+			const assetPath = `/${asset.path.slice("public/".length)}`;
+			for (const origin of [`https://${host}`, "https://blog.mourn.top"]) {
+				let response: Response;
+				try { response = await fetch(new URL(assetPath, origin), { cache: "no-store", redirect: "error", headers: { "Cache-Control": "no-cache", ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET ? { "x-vercel-protection-bypass": process.env.VERCEL_AUTOMATION_BYPASS_SECRET } : {}) }, signal: AbortSignal.timeout(15_000) }); }
+				catch { return { status: "waiting", message: "等待部署地址与生产域名图片资源可读", deploymentId: deployedId }; }
+				if (!response.ok) { await response.body?.cancel().catch(() => {}); return { status: "waiting", message: "等待部署地址与生产域名提供图片资源", deploymentId: deployedId }; }
+				const bytes = Buffer.from(await response.arrayBuffer());
+				if (bytes.length !== asset.size || createHash("sha256").update(bytes).digest("hex") !== asset.digest) return { status: "failed", message: "已部署图片与冻结上传内容不一致，私有图片草稿已保留", deploymentId: deployedId };
+			}
+		}
 		const currentAlias = await vercel<Row>("/v4/aliases/blog.mourn.top");
 		const currentDeployment = typeof currentAlias.deployment === "object" && currentAlias.deployment !== null ? String((currentAlias.deployment as Row).id) : String(currentAlias.deploymentId || "");
 		if (String(currentAlias.projectId) !== projectId || currentDeployment !== deployedId) return { status: "waiting", message: "核验期间生产域名已切换，请继续核对当前部署" };
@@ -279,6 +297,12 @@ async function completeReleaseFinalization(id: string, store: FileStore, site: s
 	if (!task.target_sha || task.production_sha !== task.target_sha || !task.deployment_id) throw new ApiFailure(409, "VERIFIED_RELEASE_REQUIRED", "发布收尾任务的身份不完整");
 	const record = await snapshotRow(store, site, task.snapshot_id); const snapshot = record?.data as FrozenSnapshot | undefined;
 	if (!snapshot || snapshot.id !== task.snapshot_id || snapshot.taskId !== id || snapshot.digest !== record?.digest || publicContentDigest(snapshot.posts, snapshot.settings, snapshot.redirects) !== snapshot.digest) throw new ApiFailure(409, "SNAPSHOT_INTEGRITY_FAILED", "发布收尾任务的冻结快照不完整");
+	const projectMediaIds = Object.entries(snapshot.media ?? {}).filter(([, media]) => media.draftPending === true).map(([mediaId]) => mediaId);
+	if (projectMediaIds.length) {
+		const { finalizeProjectMedia } = await import("./media.js");
+		const publicOrigin = String((snapshot.settings.settings as Record<string, unknown> | undefined)?.siteUrl ?? "");
+		await finalizeProjectMedia(projectMediaIds, snapshot.media, publicOrigin, store, site);
+	}
 	if (afterVerified) await afterVerified(snapshot, store, site);
 	else { const { markFriendsPublished } = await import("./interactions.js"); await markFriendsPublished(snapshot.friendIds, id, snapshot.friendRevisions, { store, site }); }
 	const done = await store.update((state) => {
@@ -313,6 +337,7 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 	const fence = await claimReleaseTask(store, site, id, Boolean(dependencies?.reconcileRestored), retryFailed); if (fence === null) return { done: false, state: "queued" };
 	let task = (await releaseRow(store, site, id))!;
 	let target = task.target_sha;
+	let preparedImageFiles: RepositoryFile[] = [];
 	let commitAttempted = false;
 	let finalizationPending = false;
 	let lostLease = false;
@@ -339,14 +364,17 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 			return persistedState();
 		}
 		if (task.state === "preparing") {
-			const ids = referencedMedia(snapshot.sources, snapshot.settings);
+			const ids = [...new Set([...referencedMedia(snapshot.sources, snapshot.settings), ...Object.entries(snapshot.media ?? {}).filter(([, media]) => media.draftPending === true).map(([mediaId]) => mediaId)])];
 			if (ids.length) {
 				await retainLease();
 				let urls: Record<string, string>;
 				if (dependencies?.prepareMedia) urls = await dependencies.prepareMedia(ids, id, snapshot);
 				else {
-					const { publishMediaForSnapshot } = await import("./media.js");
-					urls = await publishMediaForSnapshot(ids, id, { store, site, frozenMedia: snapshot.media });
+					const { prepareProjectMediaForSnapshot } = await import("./media.js");
+					const publicOrigin = String((snapshot.settings.settings as Record<string, unknown> | undefined)?.siteUrl ?? "");
+					const prepared = await prepareProjectMediaForSnapshot(ids, { store, site, frozenMedia: snapshot.media, publicOrigin });
+					urls = prepared.urls; preparedImageFiles = prepared.files;
+					snapshot.mediaAssets = Object.entries(snapshot.media ?? {}).filter(([, media]) => media.draftPending === true).map(([mediaId, media]) => ({ id: mediaId, path: String(media.pathname), digest: String(media.digest), size: Number(media.size) }));
 				}
 				for (const source of snapshot.sources) source.source = replaceMedia(source.source, urls) as string;
 				snapshot.settings = replaceMedia(snapshot.settings, urls) as Record<string, unknown>;
@@ -370,15 +398,22 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 		}
 		if (!target) {
 			await retainLease();
+			if (!preparedImageFiles.length && snapshot.mediaAssets?.length) {
+				const { prepareProjectMediaForSnapshot } = await import("./media.js");
+				const publicOrigin = String((snapshot.settings.settings as Record<string, unknown> | undefined)?.siteUrl ?? "");
+				const prepared = await prepareProjectMediaForSnapshot(snapshot.mediaAssets.map((asset) => asset.id), { store, site, frozenMedia: snapshot.media, publicOrigin });
+				preparedImageFiles = prepared.files;
+			}
+			const releaseFiles = [...snapshot.files, ...preparedImageFiles];
 			const repository = await git.readRepositoryFiles();
 			if (repository.headSha !== task.base_sha) {
-				const diff = snapshot.files.filter((file) => repository.files.find((current) => current.path === file.path)?.source !== file.source).map((file) => ({ path: file.path, expectedSource: file.source, remoteSource: repository.files.find((current) => current.path === file.path)?.source ?? null }));
+				const diff = releaseFiles.filter((file) => repository.files.find((current) => current.path === file.path)?.source !== file.source).map((file) => ({ path: file.path, expectedSource: file.encoding === "base64" ? "[图片二进制内容]" : file.source, remoteSource: file.encoding === "base64" ? (repository.files.find((current) => current.path === file.path) ? "[图片二进制内容]" : null) : repository.files.find((current) => current.path === file.path)?.source ?? null }));
 				await updateTask(store, site, id, fence, "conflict", { message: "发布分支有未导入的外部修改，请比较差异后重新导入", details: { baseSha: task.base_sha, remoteSha: repository.headSha, diff } });
 				return persistedState();
 			}
 			const committedFiles = new Map(repository.files.map((file) => [file.path, file]));
 			for (const path of snapshot.deletions) committedFiles.delete(path);
-			for (const file of snapshot.files) committedFiles.set(file.path, file);
+			for (const file of releaseFiles) committedFiles.set(file.path, file);
 			// Keep hashes, not sources: the ledger is all the baseline and snapshot need, and
 			// full file copies were the bulk of the stored document.
 			snapshot.repositoryLedger = repositoryLedger([...committedFiles.values()]);
@@ -391,7 +426,7 @@ export async function processReleaseTask(id: string, dependencies?: ReleaseDepen
 			// Persist the intention before the only non-idempotent external side effect.
 			task.state = "committing";
 			commitAttempted = true;
-			target = await git.commit({ baseSha: task.base_sha, taskId: id, digest: snapshot.digest, files: snapshot.files, deletions: snapshot.deletions });
+			target = await git.commit({ baseSha: task.base_sha, taskId: id, digest: snapshot.digest, files: releaseFiles, deletions: snapshot.deletions });
 			if (!await updateTask(store, site, id, fence, "deploying", { targetSha: target })) return persistedState();
 		}
 		await retainLease();

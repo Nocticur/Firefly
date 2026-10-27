@@ -341,6 +341,7 @@ export const siteConfig: SiteConfig = applyManagedSiteSettings({
 		// 支持通配符 *，例如：["i0.hdslb.com", "*.bilibili.com"]
 		// 可解决指定域名图片加载时的 403 问题（如防盗链图片）
 		noReferrerDomains: [
+			"image.nocticur.eu.cc",
 			"*.hdslb.com",
 			"*.bilibili.com",
 			"*.myanimelist.net",

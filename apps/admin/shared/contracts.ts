@@ -60,10 +60,10 @@ export type MediaRecord = {
 	name: string;
 	contentType: string;
 	size: number;
-	access: "public";
+	access: "public" | "private";
 	alt: string;
 	caption: string;
-	/** Image host URL recorded at upload/import time. */
+	/** Public URL after publication, or authenticated API preview while still a private draft. */
 	publishedUrl?: string;
 	url?: string;
 	contentUrl?: string;

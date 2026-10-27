@@ -1,6 +1,6 @@
 # Nocticur 的 Firefly 博客与管理后台
 
-博客、`/admin/` 与 `/api/` 仍部署在同一个 Vercel 项目（`firefly`），根构建命令保持 `pnpm build:vercel`。正式文章、设置、导航和图标由后台直接读写你的 GitHub 仓库（细粒度 PAT，默认 `Nocticur/Firefly` 的 `master`）；图片上传和外链导入走 CloudFlare-ImgBed。当前不使用数据库、Cloudflare KV、Vercel Blob 或 Upstash Redis。
+博客、`/admin/` 与 `/api/` 仍部署在同一个 Vercel 项目（`firefly`），根构建命令保持 `pnpm build:vercel`。正式文章、设置、导航和图标由后台直接读写你的 GitHub 仓库（细粒度 PAT，默认 `Nocticur/Firefly` 的 `master`）；本地图片先存 Cloudflare KV，显式发布后提交到 Git 项目的 `public/uploads/`；外链导入可转存到 CloudFlare-ImgBed。不使用数据库、Vercel Blob 或 Upstash Redis。
 
 当前配置以 [环境变量填写清单](./environment-variables.md) 和 [统一部署说明](./deployment.md) 为准；服务额度见 [免费部署说明](./free-deployment.md)。
 
@@ -10,12 +10,12 @@
 | --- | --- | --- |
 | 博客 | Vercel 项目 `firefly` | Astro 静态站点，`https://blog.mourn.top/`；与后台同源构建，无需第二个项目 |
 | 管理界面、API、Workflow | 同一 Vercel 项目 | 入口 `/admin/` 与 `/api/`，Hono API 与 Vercel Workflow 部署在同一份 `.vercel/output` |
-| 正式内容 | 本项目仓库 `Nocticur/Firefly` 的 `master` | 文章、公开设置、导航、图标由后台原子提交；Git 提交是公开内容的唯一来源 |
+| 正式内容 | 本项目仓库 `Nocticur/Firefly` 的 `master` | 文章、公开设置、导航、图标及发布图片由后台提交；Git 提交是公开内容的唯一来源 |
 | 后台草稿与运行时数据 | 后台内部状态 | 草稿、历史、评论/友链审核、发布任务与维护任务；未配置 Cloudflare KV 时保存在进程内存，重启即清空 |
-| 图片与图标资源 | CloudFlare-ImgBed | 上传与外链导入都由服务端调用图床；`IMGBED_API_TOKEN` / `IMGBED_BASE_URL` |
+| 图片资源 | GitHub 项目 + Cloudflare KV | 本地图片待发布时私有暂存于 KV，发布核验后进入 `public/uploads/` 并删除 KV 字节；外链导入可转存 ImgBed |
 | 登录 | 服务端密码 + 无状态签名 Cookie | 只验证 `ADMIN_ENTRY_PASSWORD`，会话由 HMAC 签名，不需要会话表 |
 
-`siteId` 为 `GITHUB_REPOSITORY`（默认 `Nocticur/Firefly`）加运行环境。**Git 是唯一持久数据源**：后台首次打开会自动导入仓库现有文章与设置，因此不会显示空白。可选配置 Cloudflare KV 时，后台状态写入 KV；未配置时用进程内存，并发写冲突返回 `409` 提示刷新后重新编辑。文章与设置的正式版本始终以 Git 提交为准。
+`siteId` 为 `GITHUB_REPOSITORY`（默认 `Nocticur/Firefly`）加运行环境。**Git 是唯一持久数据源**：后台首次打开会自动导入仓库现有文章与设置，因此不会显示空白。可选配置 Cloudflare KV 时，后台状态写入 KV；未配置时用进程内存，并发写冲突返回 `409` 提示刷新后重新编辑；Production 与 Preview 的本地图片上传必须配置各自隔离的 KV。文章与设置的正式版本始终以 Git 提交为准。
 
 ## 登录方式
 
@@ -33,7 +33,7 @@
 | 文章与历史 | 列表、源码与可视编辑、草稿、版本历史与恢复；支持完整 Markdown/MDX 源码和未知片段保护。发布核验后自动清理该文章的本地版本历史，控制存储体积 |
 | 设置 | 站点资料、主题与功能开关等公开设置；可只存草稿，也可一键提交回仓库 |
 | 导航与图标 | 导航链接与图标位编辑；校验层级、URL 与字段，随提交或发布写入 |
-| 媒体 | 上传与导入图片到 ImgBed、记录 `alt` 与图注、发布时替换为公开地址；直接上传限制 4 MiB，外链导入最大 32 MiB |
+| 媒体 | 本地上传保存私有草稿，发布时提交到项目 `public/uploads/`；外链导入可转存 ImgBed；直接上传限制 4 MiB，外链导入最大 32 MiB |
 | 评论 | 公开评论审核、删除占位、封禁与限流；Turnstile 校验，访客邮箱不公开 |
 | 友链 | 申请审核、分组与排序、上线状态与健康检测结果展示 |
 | 发布 | 创建发布任务、冻结快照、直接提交 Git、核验生产域名与发布清单；未配置 KV 时在同一请求内完成；失败或未知结果可核查 |
@@ -66,7 +66,7 @@ pnpm build:vercel
 | 认证 | `GET/POST /api/auth/entry`、`GET /api/auth/session`、`POST /api/auth/logout` |
 | 文章 | `GET/POST /api/posts`、`GET/PUT/PATCH /api/posts/{id}`、`GET /api/posts/{id}/history`、`POST /api/posts/{id}/restore`、`POST /api/import` |
 | 设置 | `GET/PUT /api/settings`、`POST /api/settings/commit`、`/api/navigation`、`/api/icons`、`/api/service-settings` |
-| 媒体 | `GET /api/media`、`POST /api/media/upload`（multipart，≤4 MiB）、`GET /api/media/{id}/content`（302 到图床地址）、`POST /api/media/import`、`PATCH/DELETE /api/media/{id}` |
+| 媒体 | `GET /api/media`、`POST /api/media/upload`（multipart，≤4 MiB，写入私有草稿）、`GET /api/media/{id}/content`（受保护预览或公开地址跳转）、`POST /api/media/import`、`PATCH/DELETE /api/media/{id}` |
 | 公开互动 | `GET/POST /api/public/comments`、`GET/POST /api/public/friends` |
 | 审核 | `/api/comments/{id}/delete`、`/api/bans`、`/api/friends/{id}/approve`、`/api/friends/{id}/reject`、`PATCH /api/friends/{id}` |
 | 发布 | `POST /api/releases`、`GET /api/tasks`、`GET /api/tasks/{id}`、`POST /api/tasks/{id}/reconcile` |

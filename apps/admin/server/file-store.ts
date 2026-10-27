@@ -13,6 +13,10 @@ export type StoreState = {
 	lastMutationIds?: string[];
 };
 export interface FileStore {
+	readonly durableMediaBlobs: boolean;
+	readMediaBlob(id: string): Promise<Buffer | null>;
+	writeMediaBlob(id: string, bytes: Uint8Array): Promise<void>;
+	deleteMediaBlob(id: string): Promise<void>;
 	read(): Promise<StoreState>;
 	update<T>(fn: (state: StoreState) => T): Promise<T>;
 	/**
@@ -31,6 +35,9 @@ export interface FileStore {
 	migrateLegacyColdRows(): Promise<boolean>;
 }
 export interface DocumentBackend {
+	readMediaBlob?(id: string): Promise<Buffer | null>;
+	writeMediaBlob?(id: string, bytes: Uint8Array): Promise<void>;
+	deleteMediaBlob?(id: string): Promise<void>;
 	read(): Promise<{ json: string; etag: string } | null>;
 	write(json: string, expectedEtag: string | null): Promise<boolean>;
 	readCold?(): Promise<{ json: string; etag: string } | null>;
@@ -431,6 +438,13 @@ export function createFileStore(
 		});
 	}
 	return {
+		durableMediaBlobs: Boolean(backend.readMediaBlob && backend.writeMediaBlob && backend.deleteMediaBlob),
+		readMediaBlob: (id) => backend.readMediaBlob?.(id) ?? Promise.resolve(null),
+		writeMediaBlob: async (id, bytes) => {
+			if (!backend.writeMediaBlob) throw new ApiFailure(503, "MEDIA_DRAFT_STORAGE_REQUIRED", "私有图片草稿需要配置 Cloudflare KV");
+			await backend.writeMediaBlob(id, bytes);
+		},
+		deleteMediaBlob: async (id) => { await backend.deleteMediaBlob?.(id); },
 		read: async () => { await maybeRecover(); return readHot(); },
 		update: async <T>(fn: (state: StoreState) => T) => { await maybeRecover(); return updateHot(fn); },
 		readCold,
@@ -445,6 +459,7 @@ export function createMemoryStore(
 	site = "Nocticur/Firefly:development",
 ): FileStore {
 	let json = JSON.stringify(empty(site));
+	const mediaBlobs = new Map<string, Buffer>();
 	let tail = Promise.resolve();
 	async function readState(): Promise<StoreState> {
 		await tail;
@@ -467,6 +482,10 @@ export function createMemoryStore(
 		}
 	}
 	return {
+		durableMediaBlobs: false,
+		readMediaBlob: async (id) => { const bytes = mediaBlobs.get(id); return bytes ? Buffer.from(bytes) : null; },
+		writeMediaBlob: async (id, bytes) => { mediaBlobs.set(id, Buffer.from(bytes)); },
+		deleteMediaBlob: async (id) => { mediaBlobs.delete(id); },
 		read: readState,
 		update: updateState,
 		// No separate document in memory: history and snapshots stay in the single state.
@@ -509,8 +528,8 @@ export function getStore(): FileStore {
 		const backend = createCloudflareKvDocumentBackend(config, site);
 		return createFileStore(backend, site);
 	}
-	// Cloudflare KV is optional: content and settings come from the Git repository, so an
-	// unconfigured deployment runs on an in-process store. It is cached per site because a
+	// Cloudflare KV is optional for ordinary content because Git is its source of truth.
+	// Private media uploads require the durable blob methods; ordinary state uses a per-site memory store because a
 	// fresh store per call would discard every draft as soon as the request ended.
 	let memory = memoryStores.get(site);
 	if (!memory) {
