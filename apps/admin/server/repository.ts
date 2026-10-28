@@ -5,7 +5,7 @@ import { ApiFailure, digest } from "./security.js";
 import { validatePostSource } from "./source-document.js";
 import { readRepositoryFiles, personalToken, GitHubError } from "./github.js";
 import { deriveManagedSettings, MANAGED_SETTINGS_PATH } from "./managed-settings.js";
-import { ledgerFromBaseline, repositoryLedger } from "./release-format.js";
+import { canonicalJson, ledgerFromBaseline, repositoryLedger } from "./release-format.js";
 
 type SourceFile = { path: string; source: string; encoding?: "base64" };
 type RepositoryReader = (sha?: string) => Promise<Awaited<ReturnType<typeof readRepositoryFiles>>>;
@@ -177,6 +177,43 @@ function isPublicRepositoryPath(path: string): boolean {
 		|| path.startsWith("public/");
 }
 
+/**
+ * These files are produced by maintenance or carry release bookkeeping, not authored
+ * public content. Comparing them byte-for-byte made routine health checks block every
+ * future code update even when the published articles and settings were unchanged.
+ */
+function isGeneratedFriendHealthPath(path: string): boolean {
+	return path === "public/data/friends-health.json"
+		|| /^public\/assets\/friends\/[a-f0-9]{32}\.webp$/i.test(path);
+}
+
+function isSemanticallyUnchangedPublicFile(path: string, expected: string | null, remote: string | null): boolean {
+	if (isGeneratedFriendHealthPath(path)) return true;
+	if (expected === null || remote === null) return false;
+	if (path === "src/data/managed-settings.json") {
+		try {
+			const before = JSON.parse(expected) as Record<string, unknown>;
+			const after = JSON.parse(remote) as Record<string, unknown>;
+			if (Array.isArray(before.friends) && before.friends.length === 0) delete before.friends;
+			if (Array.isArray(after.friends) && after.friends.length === 0) delete after.friends;
+			return canonicalJson(before) === canonicalJson(after);
+		} catch { return false; }
+	}
+	if (path === "src/data/published-state.json") {
+		try {
+			const stripBookkeeping = (source: string) => {
+				const value = JSON.parse(source) as Record<string, unknown>;
+				delete value.taskId;
+				delete value.snapshotId;
+				delete value.publicContentDigest;
+				return canonicalJson(value);
+			};
+			return stripBookkeeping(expected) === stripBookkeeping(remote);
+		} catch { return false; }
+	}
+	return false;
+}
+
 /** Only code-only Git changes may advance the baseline. Private file drafts stay untouched. */
 export async function synchronizeRepository(store: FileStore, siteId: string, expectedHeadSha: string, reader: RepositoryReader = readRepositoryFiles) {
 	if (!/^[a-f0-9]{40}$/i.test(expectedHeadSha)) throw new ApiFailure(400, "BASELINE_REVISION_REQUIRED", "提供已读取基线的完整 expectedHeadSha");
@@ -202,9 +239,10 @@ export async function synchronizeRepository(store: FileStore, siteId: string, ex
 	const expectedHashes = new Map((expectedLedger ?? repositoryLedger(evidenceFiles!)).map((entry) => [entry.path, entry.sha256]));
 	const remoteHashes = new Map(repositoryLedger(remote.files).map((entry) => [entry.path, entry.sha256]));
 	const changed = [...new Set([...expectedHashes.keys(), ...remoteHashes.keys()])].filter((path) => expectedHashes.get(path) !== remoteHashes.get(path));
-	const publicChanges = changed.filter(isPublicRepositoryPath);
+	const publicChanges = changed.filter((path) => isPublicRepositoryPath(path) && !isGeneratedFriendHealthPath(path));
 	const differences = publicChanges.length
-		? compareRepositoryFiles(await readEvidence(), remote.files).filter((difference) => isPublicRepositoryPath(difference.path))
+		? compareRepositoryFiles(await readEvidence(), remote.files).filter((difference) => isPublicRepositoryPath(difference.path)
+			&& !isSemanticallyUnchangedPublicFile(difference.path, difference.expectedSource, difference.remoteSource))
 		: [];
 	return store.update((state) => {
 		assertSite(state, siteId);
